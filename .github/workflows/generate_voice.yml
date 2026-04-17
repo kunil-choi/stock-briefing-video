@@ -1,12 +1,10 @@
 name: 🎙️ Generate Voice Dubbing
 
 on:
-  # 원고 생성 후 자동 실행
   workflow_run:
     workflows: ["📝 Generate Broadcast Script"]
     types:
       - completed
-  # 수동 실행도 가능
   workflow_dispatch:
 
 jobs:
@@ -25,15 +23,16 @@ jobs:
 
       - name: 📦 패키지 설치
         run: |
-          pip install openai playwright requests pydub
-          playwright install chromium
+          pip install requests
           sudo apt-get install -y ffmpeg
 
-      - name: 📝 원고 생성
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          python pipeline/generate_script.py
+      - name: 📥 원고 artifact 다운로드
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: generate_script.yml
+          name: generated-script-latest
+          path: output/KO/scripts/
+          if_no_artifact_found: fail
 
       - name: 🎙️ 더빙 생성
         env:
@@ -45,6 +44,6 @@ jobs:
       - name: 💾 결과물 저장
         uses: actions/upload-artifact@v4
         with:
-          name: generated-voice-${{ github.run_number }}
+          name: generated-voice-latest
           path: output/KO/audio/
           retention-days: 30
