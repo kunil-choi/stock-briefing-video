@@ -5,7 +5,6 @@ AI 주식 브리핑 — 에셋 생성 진입점
 """
 import os, sys, json
 
-# ── import 경로 보정 (pipeline/ 외부에서 실행될 때 대비) ─────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -21,9 +20,8 @@ from assets.builders import (
 
 
 def run(lang: str = "KO"):
-    lang = lang.upper()  # "ko" → "KO"
+    lang = lang.upper()
 
-    # ── 경로 설정 ──────────────────────────────────────────────────────────
     root = os.path.join(_HERE, "..")
     script_path = os.path.join(root, "output", lang, "scripts", "script.json")
     out_dir = os.path.join(root, "output", lang, "frames")
@@ -39,36 +37,30 @@ def run(lang: str = "KO"):
     with open(script_path, encoding="utf-8") as f:
         data = json.load(f)
 
-    print(f"📂 script.json 로드 완료 (섹션 수: {len(data.get('sections', []))})")
-
     sections = data.get("sections", [])
+    print(f"📂 script.json 로드 완료 (섹션 수: {len(sections)})")
+
     asset_map = {"frames": [], "lang": lang}
 
-    # ── 오프닝 ────────────────────────────────────────────────────────────
     asset_map["frames"].append(build_opening(data, out_dir))
-
-    # ── 시장 개요 ──────────────────────────────────────────────────────────
     asset_map["frames"].extend(build_market_summary(data, out_dir))
-
-    # ── 섹터 ──────────────────────────────────────────────────────────────
     asset_map["frames"].append(build_sector(data, out_dir))
 
-    # ── 종목 카드 (stock_ 및 hidden_ 접두사) ───────────────────────────────
-    stock_secs = [s for s in sections
-                  if s.get("id", "").startswith("stock_") or s.get("id", "").startswith("hidden_")]
+    stock_secs = [
+        s for s in sections
+        if s.get("id", "").startswith("stock_") or s.get("id", "").startswith("hidden_")
+    ]
     for i, sec in enumerate(stock_secs):
-        name = sec.get("data", {}).get("name", sec.get("id", f"stock_{i}"))
+        sec_id = sec.get("id", f"stock_{i}")
+        # ── 수정: data 서브키 없음, id에서 직접 종목명 추출 ──────────────
+        name = sec_id.replace("stock_", "").replace("hidden_", "")
         prefix = f"{10 + i:02d}_{name}"
         frames = build_stock_cards(sec, out_dir, img_dir, prefix)
         asset_map["frames"].extend(frames)
 
-    # ── AI 전략 ───────────────────────────────────────────────────────────
     asset_map["frames"].append(build_ai_strategy(data, out_dir))
-
-    # ── 클로징 ────────────────────────────────────────────────────────────
     asset_map["frames"].append(build_closing(data, out_dir))
 
-    # ── asset_map 저장 ────────────────────────────────────────────────────
     map_path = os.path.join(root, "output", lang, "asset_map.json")
     with open(map_path, "w", encoding="utf-8") as f:
         json.dump(asset_map, f, ensure_ascii=False, indent=2)
