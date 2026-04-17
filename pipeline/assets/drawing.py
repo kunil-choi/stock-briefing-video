@@ -7,15 +7,10 @@ from .config import W, H, C, FONT_PATHS
 
 @lru_cache(maxsize=32)
 def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
-    """
-    한글 지원 폰트를 3단계로 탐색:
-    1) config.py FONT_PATHS
-    2) fc-list :lang=ko 시스템 탐색
-    3) 알려진 경로 하드코딩 리스트
-    """
-    candidates = list(FONT_PATHS[0] if bold else FONT_PATHS[1])
+    # ── 1단계: config.py FONT_PATHS ──────────────────────────────────────
+    candidates = list(FONT_PATHS["bold"] if bold else FONT_PATHS["regular"])  # 버그1 수정
 
-    # ── 2단계: fc-list로 시스템 CJK 폰트 탐색 ──────────────────────────
+    # ── 2단계: fc-list로 시스템 CJK 폰트 탐색 ────────────────────────────
     try:
         result = subprocess.run(
             ["fc-list", ":lang=ko", "--format=%{file}\n"],
@@ -24,7 +19,6 @@ def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
         for line in result.stdout.splitlines():
             path = line.strip()
             if path and os.path.isfile(path):
-                # Bold 우선 / Regular 우선 분기
                 if bold and any(k in path for k in ["Bold", "bold", "Heavy", "Black"]):
                     candidates.insert(0, path)
                 elif not bold and not any(k in path for k in ["Bold", "bold", "Heavy", "Black"]):
@@ -34,28 +28,23 @@ def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
     except Exception:
         pass
 
-    # ── 3단계: 알려진 경로 하드코딩 (Ubuntu Actions 기준) ───────────────
+    # ── 3단계: 알려진 경로 하드코딩 ──────────────────────────────────────
     known = [
-        # opentype/noto (Ubuntu 기본)
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        # truetype/noto (일부 버전)
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        # noto-cjk 패키지
         "/usr/share/fonts/noto-cjk/NotoSansCJKkr-Bold.otf",
         "/usr/share/fonts/noto-cjk/NotoSansCJKkr-Regular.otf",
-        # DejaVu fallback (한글 없지만 레이아웃용)
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        # macOS
         "/System/Library/Fonts/AppleGothic.ttf",
         "/Library/Fonts/NanumGothicBold.ttf",
         "/Library/Fonts/NanumGothic.ttf",
     ]
     if bold:
-        candidates += [p for p in known if "Bold" in p or "Bold" in p]
-        candidates += [p for p in known if "Bold" not in p]
+        candidates += [p for p in known if "Bold" in p or "bold" in p]  # 버그2 수정
+        candidates += [p for p in known if "Bold" not in p and "bold" not in p]
     else:
         candidates += [p for p in known if "Bold" not in p and "bold" not in p]
         candidates += [p for p in known if "Bold" in p or "bold" in p]
@@ -104,11 +93,9 @@ def gold_underline(draw: ImageDraw.ImageDraw, x: int, y: int, text: str, size: i
 
 
 def paste_image(img: Image.Image, path: str, box: tuple):
-    """box = (x1, y1, x2, y2)"""
     try:
         src = Image.open(path).convert("RGBA")
         bw, bh = box[2] - box[0], box[3] - box[1]
-        # 비율 유지하며 박스 채우기
         src_ratio = src.width / src.height
         box_ratio = bw / bh
         if src_ratio > box_ratio:
@@ -121,7 +108,6 @@ def paste_image(img: Image.Image, path: str, box: tuple):
         crop_x = (new_w - bw) // 2
         crop_y = (new_h - bh) // 2
         src = src.crop((crop_x, crop_y, crop_x + bw, crop_y + bh))
-        # 흰 배경 합성
         bg = Image.new("RGB", (bw, bh), C["card"])
         bg.paste(src, (0, 0), src.split()[3] if src.mode == "RGBA" else None)
         img.paste(bg, (box[0], box[1]))
@@ -140,12 +126,10 @@ def draw_wrapped_text(
     color: tuple = None,
     line_gap: int = 10,
 ) -> int:
-    """자동 줄바꿈 텍스트. 마지막 y 좌표 반환."""
     color = color or C["white"]
     font = fnt(size, bold=bold)
-    words = list(text)  # 한글은 글자 단위로 분리
     line = ""
-    for ch in words:
+    for ch in list(text):
         test = line + ch
         try:
             w = draw.textlength(test, font=font)
@@ -177,7 +161,6 @@ def draw_badge(
     fg: tuple = None,
     size: int = 26,
 ) -> int:
-    """뱃지를 그리고 끝 x 좌표 반환."""
     bg = bg or C["tag_bg"]
     fg = fg or C["white"]
     font = fnt(size, bold=True)
