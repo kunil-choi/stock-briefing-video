@@ -1,6 +1,7 @@
 # pipeline/assets/image_fetch.py
 import os
 import requests
+from typing import List, Optional
 from .config import NEWS_IMAGE_FALLBACKS
 
 HEADERS = {
@@ -25,18 +26,12 @@ def _try_download(url: str, save_path: str) -> bool:
 
 
 def fetch_news_image(stock_name: str, img_dir: str,
-                     extra_urls: list[str] = None) -> str | None:
-    """
-    우선순위: extra_urls → Wikimedia 로고 fallback → None
-    성공 시 저장 경로 반환.
-    """
+                     extra_urls: Optional[List[str]] = None) -> Optional[str]:
     save_path = os.path.join(img_dir, f"news_{stock_name}.jpg")
     if os.path.exists(save_path):
         return save_path
 
     candidates = list(extra_urls or [])
-
-    # Wikimedia / 공식 로고 fallback
     fallback = NEWS_IMAGE_FALLBACKS.get(stock_name)
     if fallback:
         candidates.append(fallback)
