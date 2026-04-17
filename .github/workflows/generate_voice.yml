@@ -47,3 +47,4 @@ jobs:
           name: generated-voice-latest
           path: output/KO/audio/
           retention-days: 30
+          overwrite: true
