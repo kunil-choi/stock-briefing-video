@@ -1,7 +1,18 @@
 # pipeline/assets/builders.py
+"""
+script.json의 sections 배열 구조에 맞춰 각 프레임을 생성합니다.
+sections[i] 구조:
+  {
+    "id": "opening" | "market_overview" | "sector_analysis"
+         | "stock_삼성전자" | "hidden_크래프톤"
+         | "ai_strategy" | "closing",
+    "label": "...",
+    "narration": "...",
+    "data": { ... }   ← 섹션별 데이터
+  }
+"""
 import os
 from PIL import Image, ImageDraw
-
 from .config import W, H, C
 from .drawing import (
     fnt, new_frame, draw_topbar, draw_bottombar,
@@ -12,453 +23,366 @@ from .chart import build_chart_image
 from .image_fetch import fetch_news_image
 
 
-# ── 공통 헬퍼: sections 섹션에서 종목명 추출 ──────────────────────────────────
-def _stock_name_from_section(sec: dict) -> str:
-    """
-    label:  "관심종목 - 삼성전자"  →  "삼성전자"
-            "히든종목 - 두산에너빌리티" → "두산에너빌리티"
-    id:     "stock_삼성전자"        →  "삼성전자"  (fallback)
-    """
-    label = sec.get("label", "")
-    for prefix in ("관심종목 - ", "히든종목 - "):
-        if prefix in label:
-            return label.split(prefix, 1)[1].strip()
-    sid = sec.get("id", "")
-    for prefix in ("stock_", "hidden_"):
-        if sid.startswith(prefix):
-            return sid[len(prefix):]
-    return label.strip() or "종목"
+# ── 내부 헬퍼 ──────────────────────────────────────────────────────────────
+
+def _save(img: Image.Image, path: str) -> str:
+    img.save(path)
+    print(f"  ✅ {os.path.basename(path)}")
+    return path
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# 1. 오프닝
-# ════════════════════════════════════════════════════════════════════════════════
-def build_opening(sec: dict, data: dict, out_dir: str) -> str:
-    from datetime import datetime
+def _section_by_id(sections: list, id_prefix: str) -> dict | None:
+    for s in sections:
+        if s.get("id", "").startswith(id_prefix):
+            return s
+    return None
+
+
+def _sections_by_prefix(sections: list, prefix: str) -> list:
+    return [s for s in sections if s.get("id", "").startswith(prefix)]
+
+
+def _color_change(val) -> tuple:
+    """변동값에 따라 색상 반환"""
+    try:
+        v = float(str(val).replace(",", "").replace("%", "").replace("▲","").replace("▼","").replace("+","").replace("-",""))
+        raw = str(val)
+        if "▼" in raw or (raw.startswith("-") and v != 0):
+            return C["red"]
+    except Exception:
+        pass
+    return C["green"]
+
+
+# ── 오프닝 ──────────────────────────────────────────────────────────────────
+
+def build_opening(data: dict, out_dir: str) -> str:
+    sections = data.get("sections", [])
+    sec = _section_by_id(sections, "opening") or {}
+    d = sec.get("data", {})
+
     img = new_frame()
-    d   = ImageDraw.Draw(img)
+    draw = ImageDraw.Draw(img)
 
-    d.rectangle([0, 0, W, 8], fill=C["gold"])
+    # 배경 그라데이션 효과 (수평 바)
+    for i in range(H):
+        alpha = int(15 * (1 - i / H))
+        draw.line([0, i, W, i], fill=(30 + alpha, 32 + alpha, 80 + alpha))
 
-    title = data.get("title", "AI 주식 브리핑")
-    date  = data.get("date", datetime.now().strftime("%Y년 %m월 %d일"))
+    # 중앙 타이틀
+    title = d.get("title", data.get("title", "AI 주식 브리핑"))
+    date_str = d.get("date", data.get("date", ""))
 
-    d.text((W // 2, 280), "AI 주식 브리핑",
-           font=fnt(96), fill=C["gold"], anchor="mm")
-    d.text((W // 2, 400), title,
-           font=fnt(52, bold=False), fill=C["white"], anchor="mm")
-    d.text((W // 2, 490), date,
-           font=fnt(38, bold=False), fill=C["chart_text"], anchor="mm")
+    cy = H // 2 - 120
+    draw.text((W // 2, cy), "📊", font=fnt(80, bold=True), fill=C["gold"], anchor="mm")
+    cy += 110
+    draw.text((W // 2, cy), title, font=fnt(64, bold=True), fill=C["white"], anchor="mm")
+    cy += 80
+    if date_str:
+        draw.text((W // 2, cy), date_str, font=fnt(36, bold=False), fill=C["gold"], anchor="mm")
+    cy += 60
+    draw.line([W // 2 - 200, cy, W // 2 + 200, cy], fill=C["gold"], width=3)
 
-    # 오프닝 내레이션 미리보기 (첫 2줄)
-    narration = sec.get("narration", "")
-    if narration:
-        preview = narration[:60] + ("…" if len(narration) > 60 else "")
-        d.text((W // 2, 590), preview,
-               font=fnt(32, bold=False), fill=C["chart_text"], anchor="mm")
-
-    d.text((W // 2, H - 60),
-           "⚠ 본 브리핑은 AI 자동 생성 참고자료이며 투자 권유가 아닙니다",
-           font=fnt(26, bold=False), fill=C["chart_text"], anchor="mm")
-
+    draw_bottombar(draw)
     path = os.path.join(out_dir, "00_opening.png")
-    img.save(path, quality=95)
-    print(f"  ✅ 오프닝")
-    return path
+    return _save(img, path)
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# 2. 시장 요약
-# ════════════════════════════════════════════════════════════════════════════════
-def build_market_summary(market_secs: list, out_dir: str) -> list:
-    """
-    market_secs: id == "market_summary" 인 섹션 리스트
-    script.json 구조:
-      {
-        "id": "market_summary",
-        "label": "시장 요약",
-        "narration": "...",
-        "kospi_value": "6,226",
-        "kospi_change": "+2.21%",
-        "kospi_change_positive": true,
-        "points": ["포인트1", "포인트2", ...]
-      }
-    """
-    paths = []
+# ── 시장 개요 ───────────────────────────────────────────────────────────────
+
+def build_market_summary(data: dict, out_dir: str) -> list:
+    sections = data.get("sections", [])
+    market_secs = _sections_by_prefix(sections, "market")
     if not market_secs:
-        return paths
+        # 단일 market_overview 섹션
+        sec = _section_by_id(sections, "market") or {}
+        market_secs = [sec] if sec else []
 
-    sec = market_secs[0]
-    img = new_frame()
-    d   = ImageDraw.Draw(img)
-    draw_topbar(d, "🌍 시장 요약")
+    paths = []
+    for i, sec in enumerate(market_secs):
+        d = sec.get("data", {})
+        img = new_frame()
+        draw = ImageDraw.Draw(img)
+        draw_topbar(draw, "📈 시장 개요")
 
-    # 코스피 수치
-    kospi_val = sec.get("kospi_value", "")
-    kospi_chg = sec.get("kospi_change", "")
-    is_up     = sec.get("kospi_change_positive", True)
-    price_col = C["green"] if is_up else C["red"]
-    arrow     = "▲" if is_up else "▼"
+        y = 110
+        # KOSPI 수치
+        kospi = d.get("kospi", d.get("index", ""))
+        change = d.get("change", d.get("change_pct", ""))
+        if kospi:
+            draw.text((60, y), "KOSPI", font=fnt(36, bold=False), fill=C["gold"])
+            y += 50
+            draw.text((60, y), str(kospi), font=fnt(72, bold=True), fill=C["white"])
+            if change:
+                cx = 60 + int(draw.textlength(str(kospi), font=fnt(72, bold=True))) + 20
+                draw.text((cx, y + 20), str(change), font=fnt(40, bold=True), fill=_color_change(change))
+            y += 100
 
-    gold_underline(d, 50, 85, "코스피 지수", font_size=48)
+        draw_divider(draw, y)
+        y += 24
 
-    if kospi_val:
-        d.text((50, 155),
-               f"KOSPI  {kospi_val}  {arrow} {kospi_chg}",
-               font=fnt(58), fill=price_col)
+        # 요약 텍스트
+        summary = d.get("summary", sec.get("narration", ""))
+        if summary:
+            y = draw_wrapped_text(draw, summary, 60, y, W - 120, size=34, line_gap=14)
 
-    # 포인트 불릿
-    points = sec.get("points", [])
-    cy = 250
-    for pt in points[:6]:
-        d.text((60, cy), "•", font=fnt(40), fill=C["gold"])
-        draw_wrapped_text(d, pt, 100, cy, max_width=W - 140,
-                          font_size=38, line_gap=8)
-        cy += 54
+        # 불릿 포인트
+        bullets = d.get("bullets", d.get("highlights", []))
+        for bullet in bullets[:5]:
+            y += 10
+            draw.ellipse([60, y + 12, 76, y + 28], fill=C["gold"])
+            y = draw_wrapped_text(draw, str(bullet), 96, y, W - 160, size=30, line_gap=10)
 
-    # 내레이션 하단 요약
-    narration = sec.get("narration", "")
-    if narration and cy < H - 180:
-        draw_divider(d, cy + 10)
-        draw_wrapped_text(d, narration[:200], 50, cy + 24,
-                          max_width=W - 100, font_size=32,
-                          color=C["chart_text"], line_gap=8)
+        draw_bottombar(draw)
+        fname = f"01_market_{i:02d}.png"
+        paths.append(_save(img, os.path.join(out_dir, fname)))
 
-    draw_bottombar(d, "시장 요약", "")
-    path = os.path.join(out_dir, "01_market_summary.png")
-    img.save(path, quality=95)
-    paths.append(path)
-    print(f"  ✅ 시장 요약")
+    if not paths:
+        # 빈 placeholder
+        img = new_frame()
+        draw = ImageDraw.Draw(img)
+        draw_topbar(draw, "📈 시장 개요")
+        draw.text((W // 2, H // 2), "시장 데이터 없음", font=fnt(40), fill=C["white"], anchor="mm")
+        draw_bottombar(draw)
+        path = os.path.join(out_dir, "01_market_00.png")
+        paths.append(_save(img, path))
+
     return paths
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# 3. 섹터
-# ════════════════════════════════════════════════════════════════════════════════
-def build_sector(sec: dict, out_dir: str) -> str:
-    """
-    script.json 구조:
-      {
-        "id": "sectors",
-        "sector_list": [
-          {"name": "AI 반도체 & HBM", "desc": "...", "icon": "🤖"},
-          ...
-        ]
-      }
-    """
+# ── 섹터 ────────────────────────────────────────────────────────────────────
+
+def build_sector(data: dict, out_dir: str) -> str:
+    sections = data.get("sections", [])
+    sec = _section_by_id(sections, "sector") or {}
+    d = sec.get("data", {})
+
     img = new_frame()
-    d   = ImageDraw.Draw(img)
-    draw_topbar(d, "🔥 주목 섹터")
-    gold_underline(d, 50, 85, "오늘의 주목 섹터", font_size=54)
+    draw = ImageDraw.Draw(img)
+    draw_topbar(draw, "🔍 주목 섹터", color=C["blue"])
 
-    sector_list = sec.get("sector_list", [])
-    card_w = (W - 100) // max(len(sector_list), 1)
-    card_w = min(card_w, 560)
+    y = 130
+    gold_underline(draw, 60, y, "핵심 투자 섹터", size=48)
+    y += 90
 
-    for i, item in enumerate(sector_list[:4]):
-        cx = 50 + i * (card_w + 20)
-        cy = 200
-        # 카드 배경
-        d.rounded_rectangle([(cx, cy), (cx + card_w, cy + 300)],
-                             radius=16, fill=C["card"])
-        d.rounded_rectangle([(cx, cy), (cx + card_w, cy + 300)],
-                             radius=16, outline=C["border"], width=2)
-        # 아이콘
-        icon = item.get("icon", "📊")
-        d.text((cx + card_w // 2, cy + 60), icon,
-               font=fnt(64), fill=C["white"], anchor="mm")
-        # 섹터명
-        name = item.get("name", "")
-        d.text((cx + card_w // 2, cy + 140), name,
-               font=fnt(34), fill=C["gold"], anchor="mm")
-        # 설명
-        desc = item.get("desc", "")
-        draw_wrapped_text(d, desc,
-                          cx + 16, cy + 190,
-                          max_width=card_w - 32,
-                          font_size=28, color=C["chart_text"], line_gap=6)
+    sectors = d.get("sectors", d.get("list", []))
+    if not sectors and "narration" in sec:
+        # narration에서 섹터 추출 시도
+        lines = [l.strip() for l in sec["narration"].split("\n") if l.strip()]
+        sectors = lines[:6]
 
-    draw_bottombar(d, "주목 섹터", "")
+    colors = [C["gold"], C["green"], C["blue"], (220, 100, 220), C["red"], (100, 220, 220)]
+    for idx, sector in enumerate(sectors[:6]):
+        color = colors[idx % len(colors)]
+        if isinstance(sector, dict):
+            name = sector.get("name", str(sector))
+            desc = sector.get("description", sector.get("desc", ""))
+        else:
+            name = str(sector)
+            desc = ""
+
+        # 섹터 카드
+        card_x, card_y = 60 + (idx % 2) * (W // 2), y + (idx // 2) * 160
+        draw.rounded_rectangle(
+            [card_x, card_y, card_x + W // 2 - 80, card_y + 130],
+            radius=16, fill=C["card"]
+        )
+        draw.rounded_rectangle(
+            [card_x, card_y, card_x + 8, card_y + 130],
+            radius=4, fill=color
+        )
+        draw.text((card_x + 28, card_y + 18), name, font=fnt(34, bold=True), fill=C["white"])
+        if desc:
+            draw_wrapped_text(draw, desc, card_x + 28, card_y + 64, W // 2 - 120, size=26, color=(180, 180, 200))
+
+    draw_bottombar(draw)
     path = os.path.join(out_dir, "02_sector.png")
-    img.save(path, quality=95)
-    print(f"  ✅ 섹터")
-    return path
+    return _save(img, path)
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# 4. 종목 카드 묶음
-# ════════════════════════════════════════════════════════════════════════════════
-def build_stock_cards(sec: dict, is_hidden: bool,
-                      out_dir: str, img_dir: str,
-                      prefix: str) -> list:
-    """
-    script.json 종목 섹션 구조:
-      {
-        "id": "stock_삼성전자",
-        "label": "관심종목 - 삼성전자",
-        "narration": "...",
-        "summary": "기업 한 줄 소개",
-        "price": "217,500",
-        "change": "+3.08%",
-        "change_positive": true,
-        "catalysts": ["촉매1", "촉매2", ...],
-        "risks": ["리스크1", "리스크2", ...],
-        "mentions": [
-          {"source": "채널명", "reporter": "이름", "quote": "인용문"},
-          {"source": "증권사", "analyst": "이름", "report": "보고서 내용"}
-        ]
-      }
-    """
-    paths      = []
-    stock_name = _stock_name_from_section(sec)
-    date_str   = ""
+# ── 종목 카드 ────────────────────────────────────────────────────────────────
 
-    p = _build_stock_summary(sec, stock_name, is_hidden, date_str,
-                              out_dir, img_dir, prefix)
-    paths.append(p)
+def _build_stock_summary(sec: dict, out_path: str, img_dir: str) -> str:
+    d = sec.get("data", {})
+    stock_name = d.get("name", sec.get("id", "").replace("stock_", "").replace("hidden_", ""))
 
-    p = _build_stock_chart(sec, stock_name, is_hidden, date_str,
-                            out_dir, img_dir, prefix)
-    paths.append(p)
-
-    for i, mention in enumerate(sec.get("mentions", [])):
-        p = _build_mention_page(mention, stock_name, date_str,
-                                out_dir, prefix, i)
-        paths.append(p)
-
-    return paths
-
-
-def _build_stock_summary(sec, stock_name, is_hidden,
-                          date_str, out_dir, img_dir, prefix) -> str:
     img = new_frame()
-    d   = ImageDraw.Draw(img)
-    tag_color = C["hidden_accent"] if is_hidden else C["tag_bg"]
-    draw_topbar(d, f"🎯 {'히든 ' if is_hidden else ''}종목  |  {stock_name}", tag_color)
+    draw = ImageDraw.Draw(img)
+    draw_topbar(draw, f"📌 종목 분석: {stock_name}")
 
-    gold_underline(d, 40, 85, stock_name, font_size=62)
-
-    # 주가
-    price     = sec.get("price", "")
-    change    = sec.get("change", "")
-    is_up     = sec.get("change_positive", True)
-    price_col = C["green"] if is_up else C["red"]
-    arrow     = "▲" if is_up else "▼"
-
-    if price:
-        d.text((40, 175),
-               f"{price}원   {arrow} {change}",
-               font=fnt(48), fill=price_col)
-
-    # 요약
-    summary = sec.get("summary", "")
-    cy = draw_wrapped_text(d, summary, 40, 255,
-                           max_width=920, font_size=36, line_gap=10)
-    cy += 10
-
-    # 촉매 (리스트)
-    catalysts = sec.get("catalysts", [])
-    if catalysts:
-        d.text((40, cy), "🚀 상승 촉매", font=fnt(34), fill=C["green"])
-        cy += 46
-        for cat in catalysts[:4]:
-            d.text((56, cy), "·", font=fnt(34), fill=C["green"])
-            cy = draw_wrapped_text(d, cat, 80, cy,
-                                   max_width=880, font_size=32, line_gap=6)
-        cy += 8
-
-    # 리스크 (리스트)
-    risks = sec.get("risks", [])
-    if risks and cy < H - 200:
-        d.text((40, cy), "⚠️ 리스크", font=fnt(34), fill=C["red"])
-        cy += 46
-        for risk in risks[:3]:
-            d.text((56, cy), "·", font=fnt(34), fill=C["red"])
-            cy = draw_wrapped_text(d, risk, 80, cy,
-                                   max_width=880, font_size=32, line_gap=6)
-
-    # 우측 이미지
-    img_path = fetch_news_image(stock_name, img_dir)
+    # 뉴스 이미지 (우측)
+    img_path = fetch_news_image(stock_name, img_dir, d.get("image_urls", []))
     if img_path:
-        paste_image(img, img_path, (960, 85, W - 30, H - 70))
-    else:
-        d.rounded_rectangle([(960, 85), (W - 30, H - 70)],
-                             radius=12, fill=C["card"])
-        d.rounded_rectangle([(960, 85), (W - 30, H - 70)],
-                             radius=12, outline=C["border"], width=2)
-        d.text(((960 + W - 30) // 2, (85 + H - 70) // 2),
-               stock_name, font=fnt(44), fill=C["border"], anchor="mm")
+        paste_image(img, img_path, (W - 520, 80, W - 40, 480))
 
-    draw_bottombar(d, stock_name, date_str, tag_color)
-    path = os.path.join(out_dir, f"{prefix}_1_summary.png")
-    img.save(path, quality=95)
-    print(f"  ✅ 종목 요약: {stock_name}")
-    return path
+    y = 110
+    # 종목명 + 가격
+    draw.text((60, y), stock_name, font=fnt(56, bold=True), fill=C["white"])
+    y += 70
+    price = d.get("price", d.get("current_price", ""))
+    change = d.get("change", d.get("change_pct", ""))
+    if price:
+        draw.text((60, y), f"₩{price}", font=fnt(48, bold=True), fill=C["gold"])
+        if change:
+            cx = 60 + int(draw.textlength(f"₩{price}", font=fnt(48, bold=True))) + 20
+            draw.text((cx, y + 4), str(change), font=fnt(36, bold=True), fill=_color_change(change))
+    y += 70
+
+    draw_divider(draw, y)
+    y += 24
+
+    # 촉매
+    catalysts = d.get("catalysts", d.get("catalyst", []))
+    if catalysts:
+        draw.text((60, y), "📈 투자 포인트", font=fnt(34, bold=True), fill=C["green"])
+        y += 48
+        if isinstance(catalysts, str):
+            catalysts = [catalysts]
+        for c in catalysts[:3]:
+            y = draw_wrapped_text(draw, f"• {c}", 80, y, W - 620, size=28, line_gap=8)
+
+    y += 16
+    # 리스크
+    risks = d.get("risks", d.get("risk", []))
+    if risks:
+        draw.text((60, y), "⚠️ 리스크", font=fnt(34, bold=True), fill=C["red"])
+        y += 48
+        if isinstance(risks, str):
+            risks = [risks]
+        for r in risks[:3]:
+            y = draw_wrapped_text(draw, f"• {r}", 80, y, W - 620, size=28, line_gap=8)
+
+    draw_bottombar(draw, stock_name)
+    return _save(img, out_path)
 
 
-def _build_stock_chart(sec, stock_name, is_hidden,
-                        date_str, out_dir, img_dir, prefix) -> str:
-    tag_color = C["hidden_accent"] if is_hidden else C["tag_bg"]
+def _build_stock_chart(sec: dict, out_path: str, img_dir: str) -> str:
+    d = sec.get("data", {})
+    stock_name = d.get("name", sec.get("id", "").replace("stock_", "").replace("hidden_", ""))
+
     img = new_frame()
-    d   = ImageDraw.Draw(img)
-    draw_topbar(d, f"📈 {stock_name}  주가 흐름 (최근 2주)", tag_color)
-    gold_underline(d, 50, 85, f"{stock_name}  최근 2주 일봉 차트", font_size=52)
+    draw = ImageDraw.Draw(img)
+    draw_topbar(draw, f"📊 최근 2주 차트: {stock_name}", color=(30, 60, 30))
 
     chart_path = build_chart_image(stock_name, img_dir)
-
     if chart_path:
-        paste_image(img, chart_path, (30, 155, W - 30, H - 70))
+        paste_image(img, chart_path, (60, 90, W - 60, H - 80))
     else:
-        _draw_chart_placeholder(d, 30, 155, W - 30, H - 70)
+        draw.text((W // 2, H // 2), f"{stock_name} 차트 데이터 없음",
+                  font=fnt(36), fill=(120, 120, 140), anchor="mm")
 
-    draw_bottombar(d, stock_name, date_str, tag_color)
-    path = os.path.join(out_dir, f"{prefix}_2_chart.png")
-    img.save(path, quality=95)
-    print(f"  ✅ 종목 차트: {stock_name}")
-    return path
+    draw_bottombar(draw, stock_name)
+    return _save(img, out_path)
 
 
-def _draw_chart_placeholder(d, x1, y1, x2, y2):
-    d.rounded_rectangle([(x1, y1), (x2, y2)],
-                         radius=8, fill=(16, 20, 50))
-    d.rounded_rectangle([(x1, y1), (x2, y2)],
-                         radius=8, outline=(60, 70, 120), width=2)
-    msg = "차트 데이터 준비 중"
-    f   = fnt(48, bold=False)
-    mw  = f.getbbox(msg)[2]
-    mx  = x1 + (x2 - x1 - mw) // 2
-    my  = y1 + (y2 - y1) // 2 - 30
-    d.text((mx, my), msg, font=f, fill=(120, 120, 180))
+def _build_mention_page(sec: dict, out_path: str, page_idx: int) -> str:
+    d = sec.get("data", {})
+    stock_name = d.get("name", sec.get("id", "").replace("stock_", "").replace("hidden_", ""))
 
-
-def _build_mention_page(mention: dict, stock_name: str,
-                         date_str: str, out_dir: str,
-                         prefix: str, idx: int) -> str:
-    """
-    mention 구조:
-      {"source": "채널명/증권사", "reporter": "기자명", "quote": "인용문"}
-      {"source": "증권사명",      "analyst":  "애널리스트", "report": "보고서 내용"}
-    """
     img = new_frame()
-    d   = ImageDraw.Draw(img)
+    draw = ImageDraw.Draw(img)
+    draw_topbar(draw, f"💬 전문가 멘션: {stock_name}", color=(40, 20, 60))
 
-    source  = mention.get("source", "")
-    # 발언자: reporter 또는 analyst
-    speaker = mention.get("reporter") or mention.get("analyst") or ""
-    # 인용문: quote 또는 report
-    content = mention.get("quote") or mention.get("report") or ""
+    mentions = d.get("mentions", d.get("channel_mentions", []))
+    if not mentions:
+        # narration을 멘션으로 사용
+        narration = sec.get("narration", "")
+        if narration:
+            mentions = [{"channel": "브리핑", "speaker": "", "content": narration}]
 
-    tag_color = C["blue"]
-    draw_topbar(d, f"📢 채널 언급  |  {stock_name}", tag_color)
+    y = 110
+    for m in mentions[page_idx * 3: page_idx * 3 + 3]:
+        if isinstance(m, str):
+            m = {"channel": "", "speaker": "", "content": m}
+        channel = m.get("channel", m.get("source", ""))
+        speaker = m.get("speaker", m.get("expert", ""))
+        content = m.get("content", m.get("comment", str(m)))
 
-    # 큰 따옴표
-    d.text((60, 90), "\u201c", font=fnt(130), fill=C["gold"])
+        # 멘션 카드
+        card_h = 200
+        draw.rounded_rectangle([60, y, W - 60, y + card_h], radius=14, fill=C["card"])
+        draw.rounded_rectangle([60, y, 68, y + card_h], radius=4, fill=C["gold"])
+        header = f"📺 {channel}" + (f"  |  {speaker}" if speaker else "")
+        draw.text((90, y + 16), header, font=fnt(28, bold=True), fill=C["gold"])
+        draw_wrapped_text(draw, content, 90, y + 56, W - 160, size=28, color=C["white"])
+        y += card_h + 20
 
-    # 인용 본문
-    draw_wrapped_text(d, content, 70, 200,
-                      max_width=W - 140,
-                      font_size=48, line_gap=16,
-                      color=C["white"])
-
-    # 하단 출처 바
-    bar_y = H - 190
-    d.rectangle([0, bar_y, W, bar_y + 120], fill=(8, 10, 30))
-    d.rectangle([0, bar_y, 8, bar_y + 120], fill=C["gold"])   # 좌측 포인트 바
-
-    d.text((40, bar_y + 12), source,
-           font=fnt(52), fill=C["gold"])
-    if speaker:
-        d.text((40, bar_y + 72),
-               f"출연 / 작성:  {speaker}",
-               font=fnt(34, bold=False), fill=C["white"])
-
-    draw_bottombar(d, stock_name, date_str, tag_color)
-    path = os.path.join(out_dir, f"{prefix}_3_mention_{idx:02d}.png")
-    img.save(path, quality=95)
-    print(f"  ✅ 채널 언급: {stock_name} [{source}]")
-    return path
+    draw_bottombar(draw, stock_name)
+    return _save(img, out_path)
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# 5. AI 전략
-# ════════════════════════════════════════════════════════════════════════════════
-def build_ai_strategy(sec: dict, out_dir: str) -> str:
-    """
-    script.json 구조:
-      {
-        "id": "ai_strategy",
-        "narration": "...",
-        "bullet_points": ["종목 — 전략", ...]
-      }
-    """
+def build_stock_cards(sec: dict, out_dir: str, img_dir: str, prefix: str) -> list:
+    paths = []
+    paths.append(_build_stock_summary(sec, os.path.join(out_dir, f"{prefix}_1_summary.png"), img_dir))
+    paths.append(_build_stock_chart(sec, os.path.join(out_dir, f"{prefix}_2_chart.png"), img_dir))
+
+    d = sec.get("data", {})
+    mentions = d.get("mentions", d.get("channel_mentions", []))
+    if not mentions:
+        mentions = [sec.get("narration", "")]
+    pages = max(1, (len(mentions) + 2) // 3)
+    for p in range(pages):
+        paths.append(
+            _build_mention_page(sec, os.path.join(out_dir, f"{prefix}_3_mention_{p:02d}.png"), p)
+        )
+    return paths
+
+
+# ── AI 전략 ─────────────────────────────────────────────────────────────────
+
+def build_ai_strategy(data: dict, out_dir: str) -> str:
+    sections = data.get("sections", [])
+    sec = _section_by_id(sections, "ai_strategy") or _section_by_id(sections, "strategy") or {}
+    d = sec.get("data", {})
+
     img = new_frame()
-    d   = ImageDraw.Draw(img)
-    draw_topbar(d, "🤖 AI 종합 전략")
-    gold_underline(d, 50, 85, "오늘의 AI 투자 전략", font_size=54)
+    draw = ImageDraw.Draw(img)
+    draw_topbar(draw, "🤖 AI 투자 전략", color=(40, 20, 70))
 
-    bullet_points = sec.get("bullet_points", [])
-    narration     = sec.get("narration", "")
+    y = 110
+    gold_underline(draw, 60, y, "AI 분석 종합 전략", size=48)
+    y += 90
 
-    if bullet_points:
-        cy = 180
-        for bp in bullet_points[:7]:
-            # 종목명 — 전략 으로 분리해서 종목명은 골드로
-            if "—" in bp:
-                name_part, strat_part = bp.split("—", 1)
-                d.text((50, cy), name_part.strip(),
-                       font=fnt(36), fill=C["gold"])
-                nw = fnt(36).getbbox(name_part.strip())[2]
-                d.text((50 + nw + 10, cy), "—",
-                       font=fnt(36, bold=False), fill=C["border"])
-                cy = draw_wrapped_text(d, strat_part.strip(),
-                                       50 + nw + 36, cy,
-                                       max_width=W - 100 - nw - 36,
-                                       font_size=34, line_gap=6)
-            else:
-                d.text((50, cy), "•", font=fnt(36), fill=C["gold"])
-                cy = draw_wrapped_text(d, bp, 80, cy,
-                                       max_width=W - 130,
-                                       font_size=34, line_gap=6)
-            cy += 10
-            draw_divider(d, cy)
-            cy += 14
-    elif narration:
-        draw_wrapped_text(d, narration, 50, 180,
-                          max_width=W - 100,
-                          font_size=36, line_gap=12)
+    strategies = d.get("strategies", d.get("items", []))
+    if not strategies and "narration" in sec:
+        strategies = [{"stock": "종합", "strategy": sec["narration"]}]
 
-    draw_bottombar(d, "AI 전략", "")
+    for strat in strategies[:6]:
+        if isinstance(strat, str):
+            strat = {"stock": "", "strategy": strat}
+        stock = strat.get("stock", strat.get("name", ""))
+        strategy = strat.get("strategy", strat.get("content", strat.get("description", "")))
+
+        draw.rounded_rectangle([60, y, W - 60, y + 110], radius=12, fill=C["card"])
+        if stock:
+            draw.text((90, y + 14), stock, font=fnt(30, bold=True), fill=C["gold"])
+        draw_wrapped_text(draw, strategy, 90, y + 52, W - 160, size=27, color=C["white"])
+        y += 124
+
+    draw_bottombar(draw)
     path = os.path.join(out_dir, "98_ai_strategy.png")
-    img.save(path, quality=95)
-    print(f"  ✅ AI 전략")
-    return path
+    return _save(img, path)
 
 
-# ════════════════════════════════════════════════════════════════════════════════
-# 6. 클로징
-# ════════════════════════════════════════════════════════════════════════════════
-def build_closing(sec: dict, out_dir: str) -> str:
+# ── 클로징 ──────────────────────────────────────────────────────────────────
+
+def build_closing(data: dict, out_dir: str) -> str:
+    sections = data.get("sections", [])
+    sec = _section_by_id(sections, "closing") or {}
+    d = sec.get("data", {})
+
     img = new_frame()
-    d   = ImageDraw.Draw(img)
-    d.rectangle([0, 0, W, 8], fill=C["gold"])
+    draw = ImageDraw.Draw(img)
 
-    disclaimer = sec.get("disclaimer",
-                          "본 브리핑은 AI가 생성한 참고 자료이며 투자 권유가 아닙니다.\n"
-                          "투자의 최종 판단과 책임은 본인에게 있습니다.")
+    cy = H // 2 - 100
+    draw.text((W // 2, cy), "감사합니다", font=fnt(72, bold=True), fill=C["white"], anchor="mm")
+    cy += 90
+    draw.text((W // 2, cy), "구독과 좋아요는 큰 힘이 됩니다 🙏",
+              font=fnt(36, bold=False), fill=C["gold"], anchor="mm")
+    cy += 60
+    disclaimer = d.get("disclaimer", "본 영상은 AI가 생성한 참고용 정보이며, 투자 권유가 아닙니다.")
+    draw.text((W // 2, cy), disclaimer, font=fnt(26, bold=False), fill=(150, 150, 170), anchor="mm")
 
-    d.text((W // 2, 340), "오늘 브리핑을 마칩니다",
-           font=fnt(72), fill=C["white"], anchor="mm")
-    d.text((W // 2, 450), "구독과 좋아요는 큰 힘이 됩니다 🙏",
-           font=fnt(44, bold=False), fill=C["chart_text"], anchor="mm")
-
-    # 면책 고지 (두 줄 처리)
-    for i, line in enumerate(disclaimer.split("\n")):
-        d.text((W // 2, 580 + i * 52), line,
-               font=fnt(30, bold=False), fill=C["chart_text"], anchor="mm")
-
-    d.rectangle([0, H - 8, W, H], fill=C["gold"])
-
+    draw_bottombar(draw)
     path = os.path.join(out_dir, "99_closing.png")
-    img.save(path, quality=95)
-    print(f"  ✅ 클로징")
-    return path
+    return _save(img, path)
