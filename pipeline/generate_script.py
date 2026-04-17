@@ -44,7 +44,17 @@ def generate_script(briefing_text: str) -> dict:
 2. 각 섹션은 명확한 전환 멘트로 구분
 3. 숫자는 읽기 쉽게 변환
    예) 6091 → 육천구십일 포인트
-4. 섹션 구조 유지
+4. 관심종목과 히든종목은 반드시 종목별로
+   아래 항목을 모두 포함해서 작성
+   - 종목 소개 및 요약
+   - 주가 흐름 언급
+   - 상승 촉매
+   - 리스크
+   - 채널별 언급 내용 요약
+5. AI 투자 전략은 bullet_points 항목에
+   핵심 전략 5~6개를 별도로 작성
+6. 브리핑 원문의 모든 종목과 내용을
+   빠짐없이 포함할 것
 
 반드시 아래 JSON 형식으로 출력:
 {
@@ -67,19 +77,37 @@ def generate_script(briefing_text: str) -> dict:
       "narration": "내레이션 텍스트"
     },
     {
-      "id": "stocks",
-      "label": "관심 종목",
-      "narration": "내레이션 텍스트"
+      "id": "stock_SK하이닉스",
+      "label": "관심종목 - SK하이닉스",
+      "narration": "종목별 상세 내레이션"
+    },
+    {
+      "id": "stock_삼성전자",
+      "label": "관심종목 - 삼성전자",
+      "narration": "종목별 상세 내레이션"
+    },
+    {
+      "id": "stock_현대차",
+      "label": "관심종목 - 현대차",
+      "narration": "종목별 상세 내레이션"
     },
     {
       "id": "hidden_stocks",
       "label": "히든 종목",
-      "narration": "내레이션 텍스트"
+      "narration": "히든 종목 상세 내레이션"
     },
     {
       "id": "ai_strategy",
       "label": "AI 투자 전략",
-      "narration": "내레이션 텍스트"
+      "narration": "전략 내레이션",
+      "bullet_points": [
+        "핵심 전략 1",
+        "핵심 전략 2",
+        "핵심 전략 3",
+        "핵심 전략 4",
+        "핵심 전략 5",
+        "핵심 전략 6"
+      ]
     },
     {
       "id": "closing",
@@ -88,6 +116,9 @@ def generate_script(briefing_text: str) -> dict:
     }
   ]
 }
+
+※ 관심종목 섹션은 브리핑에 나온
+   실제 종목 수만큼 반드시 생성할 것
 """
             },
             {
@@ -96,7 +127,8 @@ def generate_script(briefing_text: str) -> dict:
             }
         ],
         response_format={"type": "json_object"},
-        temperature=0.7
+        temperature=0.7,
+        max_tokens=4000
     )
 
     script = json.loads(response.choices[0].message.content)
