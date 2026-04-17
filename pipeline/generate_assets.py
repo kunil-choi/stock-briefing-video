@@ -1,470 +1,553 @@
 import os
 import json
-import time
-import requests
-from PIL import Image, ImageDraw, ImageFont
-from playwright.sync_api import sync_playwright
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import textwrap
 
-# ─────────────────────────────────────────────
-# 설정
-# ─────────────────────────────────────────────
+# ── 기본 설정 ──────────────────────────────────────────
+W, H = 1920, 1080
+FONT_PATH = "assets/fonts/NotoSansKR-Bold.ttf"
+FONT_PATH_REGULAR = "assets/fonts/NotoSansKR-Regular.ttf"
 
-VIDEO_WIDTH  = 1920
-VIDEO_HEIGHT = 1080
-FONT_PATH    = "assets/fonts/NotoSansKR-Bold.ttf"
-BG_COLOR     = (10, 15, 30)       # 다크 배경
-GOLD_COLOR   = (255, 200, 0)      # 골드 (타이틀)
-WHITE_COLOR  = (220, 220, 240)    # 흰색 (본문)
-GREEN_COLOR  = (0, 255, 150)      # 초록 (상승)
-RED_COLOR    = (255, 100, 100)    # 빨강 (하락/리스크)
-BLUE_COLOR   = (100, 180, 255)    # 파랑 (정보)
-
-STOCK_CODE_MAP = {
-    "삼성전자":     "005930",
-    "SK하이닉스":   "000660",
-    "현대차":       "005380",
-    "현대로템":     "064350",
-    "현대위아":     "011210",
-    "신세계":       "004170",
-    "두산에너빌리티": "034020",
-    "크래프톤":     "259960",
-    "하이브":       "352820",
-    "에이피알":     "278470",
-    "한화":         "000880",
-    "카카오":       "035720",
-    "OCI홀딩스":    "010060",
-    "대우건설":     "047040",
-    "한국전력":     "015760",
-    "KB금융":       "105560",
+# 컬러 팔레트
+C = {
+    "bg":        (10, 12, 25),       # 배경 다크 네이비
+    "bg2":       (18, 22, 45),       # 보조 배경
+    "gold":      (255, 195, 0),      # 골드 강조
+    "white":     (235, 235, 245),    # 본문 흰색
+    "subtext":   (160, 165, 185),    # 보조 텍스트
+    "green":     (0, 210, 120),      # 상승
+    "red":       (255, 75, 75),      # 하락
+    "blue":      (50, 140, 255),     # 포인트 블루
+    "strip_bg":  (20, 24, 50),       # 자막 띠 배경
+    "name_bg":   (255, 255, 255),    # 이름 자막 흰색 배경
+    "name_text": (20, 20, 30),       # 이름 자막 텍스트
+    "tag_news":  (180, 0, 0),        # 뉴스 태그 빨강
+    "tag_stock": (0, 80, 200),       # 종목 태그 블루
+    "overlay":   (0, 0, 0, 160),     # 반투명 오버레이
 }
 
-# ─────────────────────────────────────────────
-# 공통 유틸
-# ─────────────────────────────────────────────
+TODAY = datetime.now().strftime("%Y년 %m월 %d일")
+PROGRAM = "AI 주식 브리핑"
+WATERMARK = "AI STOCK BRIEFING"
 
-def get_font(size: int) -> ImageFont.FreeTypeFont:
+
+def font(size, bold=True):
+    path = FONT_PATH if bold else FONT_PATH_REGULAR
     try:
-        return ImageFont.truetype(FONT_PATH, size)
+        return ImageFont.truetype(path, size)
     except:
         return ImageFont.load_default()
 
-def make_base_frame() -> Image.Image:
-    """기본 배경 프레임 생성 (1920x1080 다크 테마)"""
-    img = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), BG_COLOR)
+
+def new_frame():
+    """기본 다크 배경 프레임 생성"""
+    img = Image.new("RGB", (W, H), C["bg"])
     draw = ImageDraw.Draw(img)
-    # 하단 그라데이션 효과 (간단히 직사각형으로)
-    draw.rectangle(
-        [(0, VIDEO_HEIGHT - 120), (VIDEO_WIDTH, VIDEO_HEIGHT)],
-        fill=(5, 8, 20)
-    )
+    # 미세 그라디언트 효과 (상단 약간 밝게)
+    for y in range(300):
+        alpha = int(8 * (1 - y / 300))
+        draw.line([(0, y), (W, y)], fill=(
+            min(255, C["bg"][0] + alpha),
+            min(255, C["bg"][1] + alpha),
+            min(255, C["bg"][2] + alpha + 5)
+        ))
     return img
 
-def draw_title_bar(img: Image.Image,
-                   title: str,
-                   subtitle: str = "") -> Image.Image:
-    """상단 타이틀 바"""
+
+def draw_top_bar(img, program=PROGRAM, date=TODAY, tag_text="", tag_color=None):
+    """상단 채널/프로그램 띠 (MBC 스타일)"""
     draw = ImageDraw.Draw(img)
-    # 타이틀 바 배경
-    draw.rectangle([(0, 0), (VIDEO_WIDTH, 110)], fill=(20, 25, 50))
-    # 좌측 골드 강조선
-    draw.rectangle([(0, 0), (8, 110)], fill=GOLD_COLOR)
-    # 타이틀 텍스트
-    draw.text((40, 18), title,    font=get_font(44), fill=GOLD_COLOR)
-    draw.text((40, 72), subtitle, font=get_font(26), fill=(180, 180, 200))
-    # 하단 구분선
-    draw.line([(0, 110), (VIDEO_WIDTH, 110)], fill=GOLD_COLOR, width=2)
+    bar_h = 72
+    draw.rectangle([(0, 0), (W, bar_h)], fill=C["bg2"])
+    draw.line([(0, bar_h), (W, bar_h)], fill=C["gold"], width=2)
+
+    # 태그 박스 (프로그램 앞)
+    tag_color = tag_color or C["tag_stock"]
+    tag_text = tag_text or "LIVE"
+    tw = font(22).getlength(tag_text) + 28
+    draw.rounded_rectangle([(20, 18), (20 + tw, 54)], radius=5, fill=tag_color)
+    draw.text((20 + 14, 36), tag_text, font=font(22), fill=C["white"], anchor="lm")
+
+    # 프로그램명
+    draw.text((20 + tw + 18, 36), program, font=font(28), fill=C["white"], anchor="lm")
+
+    # 날짜 (우측)
+    draw.text((W - 30, 36), date, font=font(22, bold=False), fill=C["subtext"], anchor="rm")
     return img
 
-def draw_bottom_bar(img: Image.Image, text: str) -> Image.Image:
-    """하단 자막 바"""
+
+def draw_bottom_name_strip(img, name, title="", org=""):
+    """하단 발언자/종목 이름 자막 띠 (MBC 스타일: 흰 바탕 + 이름 굵게)"""
     draw = ImageDraw.Draw(img)
-    draw.rectangle(
-        [(0, VIDEO_HEIGHT - 80), (VIDEO_WIDTH, VIDEO_HEIGHT)],
-        fill=(15, 20, 45)
+    strip_y = H - 130
+    strip_h = 85
+
+    # 반투명 배경 띠
+    overlay = Image.new("RGBA", (W, strip_h), (15, 18, 40, 220))
+    img.paste(Image.fromarray(
+        __import__('numpy').array(overlay)[..., :3].astype('uint8')), (0, strip_y)
     )
-    draw.line(
-        [(0, VIDEO_HEIGHT - 80), (VIDEO_WIDTH, VIDEO_HEIGHT - 80)],
-        fill=GOLD_COLOR, width=2
-    )
-    draw.text(
-        (VIDEO_WIDTH // 2, VIDEO_HEIGHT - 40),
-        text, font=get_font(28),
-        fill=WHITE_COLOR, anchor="mm"
-    )
+    draw = ImageDraw.Draw(img)
+    draw.line([(0, strip_y), (W, strip_y)], fill=C["gold"], width=2)
+
+    # 이름 흰색 박스
+    name_w = font(30).getlength(name) + 36
+    draw.rectangle([(40, strip_y + 16), (40 + name_w, strip_y + strip_h - 16)],
+                   fill=C["name_bg"])
+    draw.text((40 + 18, strip_y + strip_h // 2), name,
+              font=font(30), fill=C["name_text"], anchor="lm")
+
+    # 직책 / 소속
+    if title or org:
+        info = f"{title}  {org}".strip()
+        draw.text((40 + name_w + 24, strip_y + strip_h // 2),
+                  info, font=font(24, bold=False), fill=C["subtext"], anchor="lm")
+
+    # 워터마크 우측
+    draw.text((W - 30, strip_y + strip_h // 2), WATERMARK,
+              font=font(20, bold=False), fill=(80, 85, 110), anchor="rm")
     return img
 
-# ─────────────────────────────────────────────
-# 연합뉴스 이미지 크롤링
-# ─────────────────────────────────────────────
 
-def fetch_yonhap_image(keyword: str, save_path: str) -> str | None:
-    """연합뉴스에서 키워드 관련 뉴스 사진 크롤링"""
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page()
-            url = f"https://www.yna.co.kr/search/index?query={keyword}&ctype=A"
-            page.goto(url, wait_until="networkidle", timeout=15000)
-            time.sleep(1)
-
-            # 첫 번째 기사 이미지 추출
-            img_el = page.query_selector(
-                ".news-list img, .list-type038 img, article img, .img-con img"
-            )
-            if not img_el:
-                browser.close()
-                return None
-
-            img_src = img_el.get_attribute("src")
-            if not img_src:
-                browser.close()
-                return None
-            if img_src.startswith("//"):
-                img_src = "https:" + img_src
-
-            # 이미지 다운로드
-            r = requests.get(img_src, timeout=10)
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            with open(save_path, "wb") as f:
-                f.write(r.content)
-
-            browser.close()
-            print(f"    ✅ 연합뉴스 이미지 수집: {keyword}")
-            return save_path
-
-    except Exception as e:
-        print(f"    ⚠️ 이미지 수집 실패 ({keyword}): {e}")
-        return None
-
-# ─────────────────────────────────────────────
-# 네이버 주가 차트 캡처
-# ─────────────────────────────────────────────
-
-def capture_stock_chart(stock_name: str, save_path: str) -> str | None:
-    """네이버 금융에서 주가 차트 캡처"""
-    code = STOCK_CODE_MAP.get(stock_name)
-    if not code:
-        print(f"    ⚠️ 종목 코드 없음: {stock_name}")
-        return None
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page(
-                viewport={"width": 1000, "height": 600}
-            )
-            url = f"https://finance.naver.com/item/main.naver?code={code}"
-            page.goto(url, wait_until="networkidle", timeout=15000)
-            time.sleep(2)
-
-            # 차트 영역 캡처
-            chart_el = page.query_selector(
-                "#chart_area, .chart_area, #stockChart"
-            )
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-            if chart_el:
-                chart_el.screenshot(path=save_path)
-            else:
-                page.screenshot(
-                    path=save_path,
-                    clip={"x": 0, "y": 200, "width": 1000, "height": 400}
-                )
-            browser.close()
-            print(f"    ✅ 주가 차트 캡처: {stock_name}")
-            return save_path
-
-    except Exception as e:
-        print(f"    ⚠️ 차트 캡처 실패 ({stock_name}): {e}")
-        return None
-
-# ─────────────────────────────────────────────
-# 섹션별 화면 생성
-# ─────────────────────────────────────────────
-
-def build_opening_frame(section: dict, out_dir: str) -> str:
-    """오프닝 타이틀 화면"""
-    out_path = f"{out_dir}/opening.png"
-    img  = make_base_frame()
+def draw_quote_text(img, lines, x=120, y_start=200, max_width=1200,
+                    font_size=52, color=None, line_gap=20, highlight_first=False):
+    """본문 인용 텍스트 (줄바꿈 자동, 첫 줄 골드 강조 옵션)"""
     draw = ImageDraw.Draw(img)
+    color = color or C["white"]
+    f = font(font_size)
+    y = y_start
+    for i, line in enumerate(lines):
+        if not line.strip():
+            y += font_size // 2
+            continue
+        # 줄 자동 래핑
+        wrapped = textwrap.wrap(line, width=int(max_width / (font_size * 0.55)))
+        for j, wline in enumerate(wrapped):
+            c = C["gold"] if (highlight_first and i == 0 and j == 0) else color
+            draw.text((x, y), wline, font=f, fill=c)
+            y += font_size + line_gap
+    return img, y
 
-    # 중앙 타이틀
-    draw.text(
-        (VIDEO_WIDTH // 2, 380),
-        "📊 AI 주식 브리핑",
-        font=get_font(80), fill=GOLD_COLOR, anchor="mm"
-    )
-    draw.text(
-        (VIDEO_WIDTH // 2, 500),
-        section.get("narration", "")[:40],
-        font=get_font(36), fill=WHITE_COLOR, anchor="mm"
-    )
-    # 하단 날짜
-    draw_bottom_bar(img, section.get("date", ""))
 
-    img.save(out_path)
-    print(f"  ✅ 오프닝 화면 생성")
-    return out_path
-
-def build_market_summary_frame(section: dict,
-                                out_dir: str) -> str:
-    """시장 요약 화면 — 연합뉴스 사진 + 텍스트"""
-    out_path  = f"{out_dir}/market_summary.png"
-    news_path = f"{out_dir}/news_market.jpg"
-
-    # 연합뉴스 이미지 수집
-    fetch_yonhap_image("코스피 주식시장", news_path)
-
-    img  = make_base_frame()
+def draw_placeholder_box(img, x, y, w, h, label="뉴스 사진 영역", sub=""):
+    """뉴스사진 / 차트 플레이스홀더"""
     draw = ImageDraw.Draw(img)
-    draw_title_bar(img, "📊 시장 요약", "Market Summary")
+    draw.rectangle([(x, y), (x + w, y + h)], fill=(25, 30, 60),
+                   outline=(80, 90, 140), width=2)
+    # 대각선
+    draw.line([(x, y), (x + w, y + h)], fill=(50, 55, 90), width=1)
+    draw.line([(x + w, y), (x, y + h)], fill=(50, 55, 90), width=1)
+    # 레이블
+    draw.text((x + w // 2, y + h // 2 - 20), label,
+              font=font(28, bold=False), fill=(100, 110, 160), anchor="mm")
+    if sub:
+        draw.text((x + w // 2, y + h // 2 + 24), sub,
+                  font=font(20, bold=False), fill=(70, 80, 120), anchor="mm")
+    return img
 
-    # 뉴스 이미지 (좌측)
-    if os.path.exists(news_path):
-        try:
-            news_img = Image.open(news_path).resize((860, 540))
-            img.paste(news_img, (40, 130))
-        except:
-            pass
 
-    # 우측 텍스트
+def draw_divider(img, y, color=None, width=2):
+    draw = ImageDraw.Draw(img)
+    draw.line([(60, y), (W - 60, y)], fill=color or C["gold"], width=width)
+    return img
+
+
+# ═══════════════════════════════════════════════════════
+# 섹션별 프레임 빌더
+# ═══════════════════════════════════════════════════════
+
+def build_opening(section, out_dir):
+    """오프닝 – 대형 타이틀 + 키워드 3개"""
+    img = new_frame()
+    draw = ImageDraw.Draw(img)
+    img = draw_top_bar(img, tag_text="TODAY", tag_color=C["tag_stock"])
+
+    # 메인 타이틀
+    draw.text((W // 2, 260), PROGRAM,
+              font=font(88), fill=C["gold"], anchor="mm")
+    draw.text((W // 2, 360), TODAY,
+              font=font(36, bold=False), fill=C["subtext"], anchor="mm")
+
+    img = draw_divider(img, 420)
+
+    # 키워드 박스 3개
+    keywords = section.get("keywords", [])[:3]
+    box_w, box_h = 480, 100
+    gap = 60
+    total_w = box_w * 3 + gap * 2
+    start_x = (W - total_w) // 2
+    for i, kw in enumerate(keywords):
+        bx = start_x + i * (box_w + gap)
+        by = 480
+        draw.rounded_rectangle([(bx, by), (bx + box_w, by + box_h)],
+                                radius=12, fill=C["bg2"], outline=C["gold"], width=2)
+        draw.text((bx + box_w // 2, by + box_h // 2), kw,
+                  font=font(30), fill=C["white"], anchor="mm")
+
+    # 리드 멘트
+    narration = section.get("narration", "")[:60]
+    draw.text((W // 2, 660), narration,
+              font=font(34, bold=False), fill=C["subtext"], anchor="mm")
+
+    img = draw_bottom_name_strip(img, "최건일", "진행자", "AI 주식 브리핑")
+
+    path = os.path.join(out_dir, "01_opening.png")
+    img.save(path)
+    print(f"✅ 오프닝: {path}")
+    return path
+
+
+def build_market_summary(section, out_dir):
+    """시장 요약 – 좌: 텍스트, 우: 뉴스사진 플레이스홀더"""
+    img = new_frame()
+    draw = ImageDraw.Draw(img)
+    img = draw_top_bar(img, tag_text="시장 요약", tag_color=C["tag_news"])
+
+    # 섹션 제목
+    draw.text((80, 110), "📊 오늘의 시장 요약",
+              font=font(52), fill=C["gold"])
+    img = draw_divider(img, 180)
+
+    # 좌측 텍스트 영역
     narration = section.get("narration", "")
-    lines = [narration[i:i+22] for i in range(0, min(len(narration), 440), 22)]
-    y = 150
-    for line in lines[:18]:
-        draw.text((960, y), line, font=get_font(28), fill=WHITE_COLOR)
-        y += 48
+    lines = [narration[i:i+28] for i in range(0, min(len(narration), 28*6), 28)]
+    draw.text((80, 210), "코스피", font=font(36), fill=C["subtext"])
 
-    draw_bottom_bar(img, "코스피 · 코스닥 · 글로벌 시장 동향")
-    img.save(out_path)
-    print(f"  ✅ 시장 요약 화면 생성")
-    return out_path
+    # 수치 강조
+    kospi = section.get("kospi_value", "6,226")
+    change = section.get("kospi_change", "+2.21%")
+    draw.text((80, 255), kospi, font=font(96), fill=C["white"])
+    draw.text((310, 295), change, font=font(52), fill=C["green"])
 
-def build_sector_frame(section: dict, out_dir: str) -> str:
-    """주목 섹터 화면"""
-    out_path = f"{out_dir}/sectors.png"
-    img  = make_base_frame()
+    img = draw_divider(img, 380, color=(40, 45, 80), width=1)
+
+    # 요약 포인트 리스트
+    points = section.get("points", [
+        "33거래일 만에 6,200선 완전 회복",
+        "외국인 순매수 전환",
+        "AI 반도체·방산 주도",
+        "전고점 6,347 돌파 여부 관건",
+    ])
+    for i, pt in enumerate(points[:4]):
+        py = 400 + i * 80
+        draw.rectangle([(80, py + 8), (90, py + 52)], fill=C["gold"])
+        draw.text((110, py + 30), pt, font=font(32, bold=False),
+                  fill=C["white"], anchor="lm")
+
+    # 우측 뉴스사진 플레이스홀더
+    draw_placeholder_box(img, 960, 190, 900, 700,
+                         label="📰 뉴스 사진 영역",
+                         sub="(연합뉴스 이미지 삽입 예정)")
+
+    img = draw_bottom_name_strip(img, "시장 요약", f"{TODAY}")
+
+    path = os.path.join(out_dir, "02_market_summary.png")
+    img.save(path)
+    print(f"✅ 시장요약: {path}")
+    return path
+
+
+def build_sector(section, out_dir):
+    """주목 섹터 – 섹터 3개 카드형"""
+    img = new_frame()
     draw = ImageDraw.Draw(img)
-    draw_title_bar(img, "🔥 주목 섹터", "Hot Sectors")
+    img = draw_top_bar(img, tag_text="주목 섹터", tag_color=C["blue"])
 
-    narration = section.get("narration", "")
-    lines = [narration[i:i+40] for i in range(0, min(len(narration), 800), 40)]
-    y = 160
-    for line in lines[:16]:
-        draw.text((80, y), line, font=get_font(34), fill=WHITE_COLOR)
-        y += 56
+    draw.text((W // 2, 160), "🔥 오늘의 주목 섹터",
+              font=font(60), fill=C["gold"], anchor="mm")
+    img = draw_divider(img, 220)
 
-    draw_bottom_bar(img, "AI반도체 · 피지컬AI · 로보틱스 · 원자력")
-    img.save(out_path)
-    print(f"  ✅ 섹터 화면 생성")
-    return out_path
+    sectors = section.get("sector_list", [
+        {"name": "AI 반도체 & HBM",  "desc": "TSMC 실적 확인, 수요 폭발적 증가"},
+        {"name": "피지컬AI & 로보틱스", "desc": "현대차 보스턴다이내믹스, Atlas 공개"},
+        {"name": "원자력 & 에너지",   "desc": "SMR·대형 원전 수주 확대 기대"},
+    ])
 
-def build_stock_frame(section: dict,
-                      stock_name: str,
-                      out_dir: str,
-                      is_hidden: bool = False) -> list:
-    """
-    종목 화면 생성 — 3개 프레임
-    1) 종목 요약 + 뉴스 사진
-    2) 주가 차트
-    3) 채널 언급 텍스트
-    """
-    label  = "히든종목" if is_hidden else "관심종목"
-    frames = []
-    narration = section.get("narration", "")
+    card_w, card_h = 520, 500
+    gap = 60
+    total_w = card_w * 3 + gap * 2
+    sx = (W - total_w) // 2
 
-    # ── 프레임 1: 종목 요약 + 뉴스 사진
-    p1 = f"{out_dir}/{section['id']}_1_summary.png"
-    news_path = f"{out_dir}/{section['id']}_news.jpg"
-    fetch_yonhap_image(stock_name, news_path)
+    icons = ["🤖", "🦾", "⚛️"]
+    for i, sec_item in enumerate(sectors[:3]):
+        cx = sx + i * (card_w + gap)
+        cy = 260
+        # 카드 배경
+        draw.rounded_rectangle([(cx, cy), (cx + card_w, cy + card_h)],
+                                radius=16, fill=C["bg2"], outline=C["gold"], width=2)
+        # 아이콘
+        draw.text((cx + card_w // 2, cy + 90),
+                  icons[i], font=font(72), fill=C["gold"], anchor="mm")
+        # 섹터명
+        draw.text((cx + card_w // 2, cy + 200),
+                  sec_item["name"], font=font(34), fill=C["white"], anchor="mm")
+        # 구분선
+        draw.line([(cx + 40, cy + 240), (cx + card_w - 40, cy + 240)],
+                  fill=C["gold"], width=1)
+        # 설명
+        desc_lines = textwrap.wrap(sec_item["desc"], width=18)
+        for j, dl in enumerate(desc_lines[:3]):
+            draw.text((cx + card_w // 2, cy + 290 + j * 50),
+                      dl, font=font(26, bold=False),
+                      fill=C["subtext"], anchor="mm")
 
-    img1  = make_base_frame()
-    draw1 = ImageDraw.Draw(img1)
-    draw_title_bar(img1, f"🎯 {stock_name}", f"{label} — 종목 요약")
+    img = draw_bottom_name_strip(img, "주목 섹터", TODAY)
+    path = os.path.join(out_dir, "03_sectors.png")
+    img.save(path)
+    print(f"✅ 섹터: {path}")
+    return path
 
-    if os.path.exists(news_path):
-        try:
-            ni = Image.open(news_path).resize((820, 520))
-            img1.paste(ni, (40, 130))
-        except:
-            pass
 
-    lines = [narration[i:i+22] for i in range(0, min(len(narration), 440), 22)]
-    y = 150
-    for line in lines[:18]:
-        draw1.text((920, y), line, font=get_font(27), fill=WHITE_COLOR)
-        y += 47
-    draw_bottom_bar(img1, f"{stock_name} — 종목 분석")
-    img1.save(p1)
-    frames.append(p1)
+def build_stock_frame(section, stock_name, out_dir, is_hidden=False, frame_idx=0):
+    """종목 프레임 – 3장 생성: ①요약+뉴스, ②차트, ③촉매/리스크/채널"""
+    paths = []
+    prefix = "H" if is_hidden else "S"
+    tag_label = "히든 종목" if is_hidden else "관심 종목"
+    tag_color = (120, 0, 180) if is_hidden else C["tag_stock"]
 
-    # ── 프레임 2: 주가 차트
-    p2 = f"{out_dir}/{section['id']}_2_chart.png"
-    chart_path = f"{out_dir}/{section['id']}_chart_raw.png"
-    capture_stock_chart(stock_name, chart_path)
-
-    img2  = make_base_frame()
-    draw2 = ImageDraw.Draw(img2)
-    draw_title_bar(img2, f"📈 {stock_name}", "주가 흐름")
-
-    if os.path.exists(chart_path):
-        try:
-            chart_img = Image.open(chart_path).resize((1400, 650))
-            img2.paste(chart_img, (260, 130))
-        except:
-            pass
-
-    draw_bottom_bar(img2, f"{stock_name} — 최근 주가 흐름")
-    img2.save(p2)
-    frames.append(p2)
-
-    # ── 프레임 3: 채널 언급 텍스트
-    p3 = f"{out_dir}/{section['id']}_3_mentions.png"
-    img3  = make_base_frame()
-    draw3 = ImageDraw.Draw(img3)
-    draw_title_bar(img3, f"📢 {stock_name}", "채널별 언급 내용")
-
-    lines = [narration[i:i+44] for i in range(0, len(narration), 44)]
-    y = 160
-    for line in lines[:16]:
-        draw3.text((80, y), line, font=get_font(30), fill=WHITE_COLOR)
-        y += 54
-    draw_bottom_bar(img3, f"{stock_name} — 전문가 분석")
-    img3.save(p3)
-    frames.append(p3)
-
-    print(f"  ✅ {label} 화면 생성: {stock_name} (3프레임)")
-    return frames
-
-def build_strategy_frames(section: dict, out_dir: str) -> list:
-    """AI 투자 전략 — bullet_points별 프레임"""
-    frames       = []
-    bullet_points = section.get("bullet_points", [])
-    narration    = section.get("narration", "")
-
-    for i, point in enumerate(bullet_points[:6]):
-        out_path = f"{out_dir}/ai_strategy_{i}.png"
-        img  = make_base_frame()
-        draw = ImageDraw.Draw(img)
-        draw_title_bar(img, "💡 AI 투자 전략", "오늘의 핵심 전략")
-
-        # 전략 목록 (현재 항목 강조)
-        y = 160
-        for j, bp in enumerate(bullet_points[:6]):
-            if j == i:
-                # 현재 항목 강조
-                draw.rectangle(
-                    [(60, y - 8), (VIDEO_WIDTH - 60, y + 52)],
-                    fill=(30, 40, 80)
-                )
-                draw.text((80, y), f"▶  {bp}",
-                          font=get_font(32), fill=GOLD_COLOR)
-            else:
-                draw.text((80, y), f"     {bp}",
-                          font=get_font(28), fill=(150, 150, 170))
-            y += 70
-
-        # 하단 자막 (현재 항목)
-        draw_bottom_bar(img, point[:50])
-        img.save(out_path)
-        frames.append(out_path)
-
-    print(f"  ✅ AI 전략 화면 생성 ({len(frames)}프레임)")
-    return frames
-
-def build_closing_frame(section: dict,
-                         title: str,
-                         out_dir: str) -> str:
-    """클로징 화면"""
-    out_path = f"{out_dir}/closing.png"
-    img  = make_base_frame()
+    # ── 프레임 1: 종목 요약 + 뉴스사진 ──
+    img = new_frame()
     draw = ImageDraw.Draw(img)
+    img = draw_top_bar(img, tag_text=tag_label, tag_color=tag_color)
 
-    draw.text(
-        (VIDEO_WIDTH // 2, 350),
-        "📊 AI 주식 브리핑",
-        font=get_font(72), fill=GOLD_COLOR, anchor="mm"
-    )
-    draw.text(
-        (VIDEO_WIDTH // 2, 480),
-        "감사합니다",
-        font=get_font(52), fill=WHITE_COLOR, anchor="mm"
-    )
-    draw.text(
-        (VIDEO_WIDTH // 2, 580),
-        "⚠️  본 브리핑은 투자 권유가 아닙니다.",
-        font=get_font(30), fill=(180, 180, 180), anchor="mm"
-    )
-    draw_bottom_bar(img, title)
-    img.save(out_path)
-    print(f"  ✅ 클로징 화면 생성")
-    return out_path
+    # 종목명 대형 타이틀
+    draw.text((80, 110), stock_name,
+              font=font(72), fill=C["gold"])
+    draw.text((80, 195), section.get("label", ""), font=font(30, bold=False),
+              fill=C["subtext"])
 
-# ─────────────────────────────────────────────
-# 전체 실행
-# ─────────────────────────────────────────────
+    # 주가 정보
+    price = section.get("price", "")
+    change = section.get("change", "")
+    change_color = C["green"] if "+" in change else C["red"]
+    draw.text((80, 260), price, font=font(80), fill=C["white"])
+    draw.text((80 + font(80).getlength(price) + 20, 300),
+              change, font=font(48), fill=change_color)
 
-def run(lang: str = "KO"):
-    print(f"\n🖼️ 자료 화면 제작 시작 ({lang})...\n")
+    img = draw_divider(img, 380)
 
+    # 요약 본문
+    summary_lines = textwrap.wrap(section.get("summary", ""), width=38)
+    for i, line in enumerate(summary_lines[:4]):
+        draw.text((80, 400 + i * 60), line,
+                  font=font(32, bold=False), fill=C["white"])
+
+    # 우측 뉴스사진 플레이스홀더
+    draw_placeholder_box(img, 960, 110, 900, 700,
+                         label="📰 뉴스 사진",
+                         sub=f"({stock_name} 관련 연합뉴스 이미지)")
+
+    img = draw_bottom_name_strip(img, stock_name, section.get("label", ""), TODAY)
+    p1 = os.path.join(out_dir, f"{frame_idx:02d}_{prefix}_{stock_name}_1_summary.png")
+    img.save(p1); paths.append(p1)
+    print(f"✅ {stock_name} 요약: {p1}")
+
+    # ── 프레임 2: 주가 흐름 (차트 플레이스홀더) ──
+    img = new_frame()
+    draw = ImageDraw.Draw(img)
+    img = draw_top_bar(img, tag_text=f"{stock_name} 주가 흐름", tag_color=tag_color)
+
+    draw.text((80, 110), f"{stock_name} 최근 주가 흐름",
+              font=font(52), fill=C["gold"])
+    img = draw_divider(img, 180)
+
+    draw_placeholder_box(img, 80, 200, 1760, 640,
+                         label="📈 주가 차트 영역",
+                         sub="(네이버 금융 차트 캡처 삽입 예정)")
+
+    img = draw_bottom_name_strip(img, stock_name, "주가 흐름", TODAY)
+    p2 = os.path.join(out_dir, f"{frame_idx:02d}_{prefix}_{stock_name}_2_chart.png")
+    img.save(p2); paths.append(p2)
+    print(f"✅ {stock_name} 차트: {p2}")
+
+    # ── 프레임 3: 상승촉매 / 리스크 / 채널 언급 ──
+    img = new_frame()
+    draw = ImageDraw.Draw(img)
+    img = draw_top_bar(img, tag_text=f"{stock_name} 분석", tag_color=tag_color)
+
+    draw.text((80, 110), f"{stock_name} — 촉매 & 리스크",
+              font=font(48), fill=C["gold"])
+    img = draw_divider(img, 175)
+
+    # 왼쪽: 상승 촉매
+    draw.rounded_rectangle([(60, 195), (700, 700)],
+                            radius=12, fill=C["bg2"], outline=C["green"], width=2)
+    draw.text((380, 230), "📈 상승 촉매",
+              font=font(32), fill=C["green"], anchor="mm")
+    catalysts = section.get("catalysts", [])
+    for i, cat in enumerate(catalysts[:4]):
+        cy = 280 + i * 90
+        draw.rectangle([(80, cy + 6), (90, cy + 46)], fill=C["green"])
+        clines = textwrap.wrap(cat, width=22)
+        for k, cl in enumerate(clines[:2]):
+            draw.text((105, cy + 5 + k * 38),
+                      cl, font=font(26, bold=False), fill=C["white"])
+
+    # 가운데: 리스크
+    draw.rounded_rectangle([(720, 195), (1360, 700)],
+                            radius=12, fill=C["bg2"], outline=C["red"], width=2)
+    draw.text((1040, 230), "⚠️ 리스크",
+              font=font(32), fill=C["red"], anchor="mm")
+    risks = section.get("risks", [])
+    for i, risk in enumerate(risks[:4]):
+        ry = 280 + i * 90
+        draw.rectangle([(740, ry + 6), (750, ry + 46)], fill=C["red"])
+        rlines = textwrap.wrap(risk, width=22)
+        for k, rl in enumerate(rlines[:2]):
+            draw.text((765, ry + 5 + k * 38),
+                      rl, font=font(26, bold=False), fill=C["white"])
+
+    # 오른쪽: 채널 언급
+    draw.rounded_rectangle([(1380, 195), (1860, 700)],
+                            radius=12, fill=C["bg2"], outline=C["blue"], width=2)
+    draw.text((1620, 230), "📺 채널 언급",
+              font=font(32), fill=C["blue"], anchor="mm")
+    mentions = section.get("mentions", [])
+    for i, m in enumerate(mentions[:4]):
+        my = 280 + i * 110
+        # 매체명
+        draw.text((1400, my), m.get("source", ""),
+                  font=font(24), fill=C["gold"])
+        # 언급 내용
+        mlines = textwrap.wrap(m.get("quote", ""), width=18)
+        for k, ml in enumerate(mlines[:2]):
+            draw.text((1400, my + 34 + k * 34),
+                      ml, font=font(22, bold=False), fill=C["subtext"])
+
+    img = draw_bottom_name_strip(img, stock_name, "분석", TODAY)
+    p3 = os.path.join(out_dir, f"{frame_idx:02d}_{prefix}_{stock_name}_3_analysis.png")
+    img.save(p3); paths.append(p3)
+    print(f"✅ {stock_name} 분석: {p3}")
+
+    return paths
+
+
+def build_ai_strategy(section, out_dir):
+    """AI 투자 전략 – 진행자 캐릭터 영역 + 자막 6개"""
+    img = new_frame()
+    draw = ImageDraw.Draw(img)
+    img = draw_top_bar(img, tag_text="AI 투자 전략", tag_color=(160, 50, 200))
+
+    draw.text((W // 2, 155), "🧠 AI 투자 전략",
+              font=font(60), fill=C["gold"], anchor="mm")
+    img = draw_divider(img, 215)
+
+    # 좌측: 진행자 캐릭터 플레이스홀더
+    draw_placeholder_box(img, 60, 235, 640, 680,
+                         label="🎙️ 진행자",
+                         sub="(캐릭터 애니메이션 영역)")
+
+    # 우측: 전략 bullet 6개
+    bullets = section.get("bullet_points", [])
+    bx = 740
+    for i, bp in enumerate(bullets[:6]):
+        by = 250 + i * 105
+        # 번호 원형
+        draw.ellipse([(bx, by + 5), (bx + 54, by + 59)], fill=C["gold"])
+        draw.text((bx + 27, by + 32), str(i + 1),
+                  font=font(28), fill=C["bg"], anchor="mm")
+        # 텍스트
+        blines = textwrap.wrap(bp, width=46)
+        for k, bl in enumerate(blines[:2]):
+            draw.text((bx + 70, by + 8 + k * 44),
+                      bl, font=font(30 if k == 0 else 26, bold=(k == 0)),
+                      fill=C["white"] if k == 0 else C["subtext"])
+
+    img = draw_bottom_name_strip(img, "최건일", "진행자", "AI 주식 브리핑")
+    path = os.path.join(out_dir, "90_ai_strategy.png")
+    img.save(path)
+    print(f"✅ AI 전략: {path}")
+    return path
+
+
+def build_closing(section, title, out_dir):
+    """클로징 – 타이틀 + 면책 고지"""
+    img = new_frame()
+    draw = ImageDraw.Draw(img)
+    img = draw_top_bar(img, tag_text="클로징", tag_color=C["tag_stock"])
+
+    draw.text((W // 2, 300), PROGRAM,
+              font=font(80), fill=C["gold"], anchor="mm")
+    draw.text((W // 2, 405), TODAY,
+              font=font(36, bold=False), fill=C["subtext"], anchor="mm")
+
+    img = draw_divider(img, 470)
+
+    # 면책 고지
+    disclaimer = section.get("disclaimer",
+        "본 브리핑은 AI가 생성한 참고 자료이며 투자 권유가 아닙니다.\n투자의 최종 판단과 책임은 본인에게 있습니다.")
+    for i, line in enumerate(disclaimer.split("\n")):
+        draw.text((W // 2, 510 + i * 60), line,
+                  font=font(28, bold=False), fill=C["subtext"], anchor="mm")
+
+    draw.text((W // 2, 700), "다음 방송에서 만나요! 📈",
+              font=font(48), fill=C["white"], anchor="mm")
+
+    img = draw_bottom_name_strip(img, "최건일", "진행자", "AI 주식 브리핑")
+    path = os.path.join(out_dir, "99_closing.png")
+    img.save(path)
+    print(f"✅ 클로징: {path}")
+    return path
+
+
+# ═══════════════════════════════════════════════════════
+# 메인 실행
+# ═══════════════════════════════════════════════════════
+
+def run(lang="KO"):
+    print(f"\n🎬 자료 화면 제작 시작 — {lang} ({TODAY})\n")
     script_path = f"output/{lang}/scripts/script.json"
-    out_dir     = f"output/{lang}/frames"
+    out_dir = f"output/{lang}/frames"
     os.makedirs(out_dir, exist_ok=True)
 
-    with open(script_path, "r", encoding="utf-8") as f:
+    with open(script_path, encoding="utf-8") as f:
         script = json.load(f)
 
-    title    = script.get("title", "")
-    sections = script.get("sections", [])
     asset_map = {}
+    stock_idx = 10
 
-    for section in sections:
-        sid = section["id"]
-        print(f"\n  [{sid}] 화면 제작 중...")
+    for sec in script.get("sections", []):
+        sid = sec.get("id", "")
 
         if sid == "opening":
-            section["date"] = script.get("date", "")
-            asset_map[sid] = build_opening_frame(section, out_dir)
+            asset_map[sid] = build_opening(sec, out_dir)
 
         elif sid == "market_summary":
-            asset_map[sid] = build_market_summary_frame(section, out_dir)
+            asset_map[sid] = build_market_summary(sec, out_dir)
 
         elif sid == "sectors":
-            asset_map[sid] = build_sector_frame(section, out_dir)
+            asset_map[sid] = build_sector(sec, out_dir)
 
         elif sid.startswith("stock_"):
-            stock_name = sid.replace("stock_", "")
-            asset_map[sid] = build_stock_frame(
-                section, stock_name, out_dir, is_hidden=False
-            )
+            sname = sid.replace("stock_", "")
+            asset_map[sid] = build_stock_frame(sec, sname, out_dir,
+                                               frame_idx=stock_idx)
+            stock_idx += 1
 
         elif sid.startswith("hidden_"):
-            stock_name = sid.replace("hidden_", "")
-            asset_map[sid] = build_stock_frame(
-                section, stock_name, out_dir, is_hidden=True
-            )
+            sname = sid.replace("hidden_", "")
+            asset_map[sid] = build_stock_frame(sec, sname, out_dir,
+                                               is_hidden=True, frame_idx=stock_idx)
+            stock_idx += 1
 
         elif sid == "ai_strategy":
-            asset_map[sid] = build_strategy_frames(section, out_dir)
+            asset_map[sid] = build_ai_strategy(sec, out_dir)
 
         elif sid == "closing":
-            asset_map[sid] = build_closing_frame(section, title, out_dir)
+            asset_map[sid] = build_closing(sec, script.get("title", ""), out_dir)
 
     # asset_map 저장
-    map_path = f"output/{lang}/frames/asset_map.json"
+    map_path = os.path.join(out_dir, "asset_map.json")
     with open(map_path, "w", encoding="utf-8") as f:
         json.dump(asset_map, f, ensure_ascii=False, indent=2)
 
-    total_frames = sum(
-        len(v) if isinstance(v, list) else 1
-        for v in asset_map.values()
-    )
-    print(f"\n{'='*40}")
-    print(f"🎉 자료 화면 제작 완료!")
-    print(f"   총 프레임 수: {total_frames}개")
-    print(f"   저장 위치: {out_dir}")
-    print(f"{'='*40}\n")
+    total = sum(len(v) if isinstance(v, list) else 1
+                for v in asset_map.values())
+    print(f"\n🎉 완료! 총 {total}개 프레임 → {out_dir}")
+    return asset_map
+
 
 if __name__ == "__main__":
     import sys
-    lang = sys.argv[1] if len(sys.argv) > 1 else "KO"
-    run(lang)
+    run(sys.argv[1] if len(sys.argv) > 1 else "KO")
