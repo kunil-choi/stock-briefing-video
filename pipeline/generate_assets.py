@@ -83,11 +83,11 @@ def draw_bottom_name_strip(img, name, title="", org=""):
     strip_y = H - 130
     strip_h = 85
 
-    # 반투명 배경 띠
+    # 반투명 배경 띠 (numpy 없이 Pillow RGBA 합성)
     overlay = Image.new("RGBA", (W, strip_h), (15, 18, 40, 220))
-    img.paste(Image.fromarray(
-        __import__('numpy').array(overlay)[..., :3].astype('uint8')), (0, strip_y)
-    )
+    base_crop = img.crop((0, strip_y, W, strip_y + strip_h)).convert("RGBA")
+    merged = Image.alpha_composite(base_crop, overlay).convert("RGB")
+    img.paste(merged, (0, strip_y))
     draw = ImageDraw.Draw(img)
     draw.line([(0, strip_y), (W, strip_y)], fill=C["gold"], width=2)
 
