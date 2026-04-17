@@ -1,0 +1,45 @@
+name: 🖼️ Generate Assets
+
+on:
+  workflow_run:
+    workflows: ["🎙️ Generate Voice Dubbing"]
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 🐍 Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 패키지 설치
+        run: |
+          pip install openai playwright requests Pillow
+          playwright install chromium
+          sudo apt-get install -y ffmpeg
+
+      - name: 📝 원고 생성
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python pipeline/generate_script.py
+
+      - name: 🖼️ 자료 화면 제작
+        run: |
+          python pipeline/generate_assets.py KO
+
+      - name: 💾 결과물 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-assets-${{ github.run_number }}
+          path: output/KO/frames/
+          retention-days: 30
