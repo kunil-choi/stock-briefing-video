@@ -1,6 +1,10 @@
 name: 📝 Generate Broadcast Script
 
 on:
+  # 매일 오전 8시 자동 실행 (KST)
+  schedule:
+    - cron: "0 23 * * 0-4"
+  # 수동 실행도 가능
   workflow_dispatch:
 
 jobs:
@@ -31,6 +35,6 @@ jobs:
       - name: 💾 결과물 저장
         uses: actions/upload-artifact@v4
         with:
-          name: generated-script
+          name: generated-script-${{ github.run_number }}
           path: output/KO/scripts/
-          retention-days: 7
+          retention-days: 30
