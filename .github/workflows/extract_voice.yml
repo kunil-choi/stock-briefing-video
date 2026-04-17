@@ -27,25 +27,25 @@ jobs:
           pip install yt-dlp demucs pydub
           sudo apt-get install -y ffmpeg
 
+      - name: 🍪 쿠키 파일 생성
+        run: |
+          echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+
       - name: 🎵 오디오 추출
         run: |
           mkdir -p output/voice
           yt-dlp -x --audio-format mp3 \
             --audio-quality 0 \
+            --cookies cookies.txt \
             -o "output/voice/raw_audio.%(ext)s" \
             "${{ github.event.inputs.video_url }}"
 
       - name: 🎙️ 목소리 분리 (Demucs)
         run: |
-          python -c "
-          import subprocess
-          subprocess.run([
-            'python', '-m', 'demucs',
-            '--two-stems=vocals',
-            '-o', 'output/voice',
-            'output/voice/raw_audio.mp3'
-          ])
-          "
+          python -m demucs \
+            --two-stems=vocals \
+            -o output/voice \
+            output/voice/raw_audio.mp3
 
       - name: 💾 결과물 저장
         uses: actions/upload-artifact@v4
