@@ -40,9 +40,9 @@ jobs:
             python-dotenv
 
       - name: 📥 script artifact 다운로드
-        uses: dawidd6/action-download-artifact@v3   # ← 여기 변경
+        uses: dawidd6/action-download-artifact@v3
         with:
-          workflow: generate_script.yml              # ← 원본 워크플로 직접 지정
+          workflow: generate_script.yml
           name: generated-script-latest
           path: output/KO/scripts/
           if_no_artifact_found: fail
