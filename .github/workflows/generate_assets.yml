@@ -23,9 +23,16 @@ jobs:
 
       - name: 📦 패키지 설치
         run: |
-          pip install openai playwright requests Pillow
-          playwright install chromium
-          sudo apt-get install -y ffmpeg
+          pip install \
+            openai \
+            requests \
+            Pillow \
+            pykrx \
+            matplotlib \
+            pandas \
+            mplfinance \
+            python-dotenv
+          sudo apt-get install -y ffmpeg fonts-noto-cjk
 
       - name: 📝 원고 생성
         env:
@@ -34,8 +41,9 @@ jobs:
           python pipeline/generate_script.py
 
       - name: 🖼️ 자료 화면 제작
+        working-directory: pipeline
         run: |
-          python pipeline/generate_assets.py KO
+          python generate_assets.py KO
 
       - name: 💾 결과물 저장
         uses: actions/upload-artifact@v4
