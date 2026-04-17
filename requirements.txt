@@ -1,0 +1,8 @@
+pykrx
+matplotlib
+pandas
+mplfinance
+Pillow
+requests
+openai
+python-dotenv
