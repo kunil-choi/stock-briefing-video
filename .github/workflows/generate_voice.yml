@@ -1,0 +1,50 @@
+name: 🎙️ Generate Voice Dubbing
+
+on:
+  # 원고 생성 후 자동 실행
+  workflow_run:
+    workflows: ["📝 Generate Broadcast Script"]
+    types:
+      - completed
+  # 수동 실행도 가능
+  workflow_dispatch:
+
+jobs:
+  dubbing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 🐍 Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 패키지 설치
+        run: |
+          pip install openai playwright requests pydub
+          playwright install chromium
+          sudo apt-get install -y ffmpeg
+
+      - name: 📝 원고 생성
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python pipeline/generate_script.py
+
+      - name: 🎙️ 더빙 생성
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+        run: |
+          python pipeline/generate_voice.py
+
+      - name: 💾 결과물 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-voice-${{ github.run_number }}
+          path: output/KO/audio/
+          retention-days: 30
