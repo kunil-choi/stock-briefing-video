@@ -9,14 +9,16 @@ import re
 import subprocess
 import urllib.request
 
-BGM_URL       = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
-BGM_VOLUME    = 0.20
-FONT_PATH     = "assets/fonts/NotoSansKR-Bold.ttf"
-SUBTITLE_SIZE = 34
+BGM_URL            = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+BGM_VOLUME         = 0.20
+FONT_PATH          = "assets/fonts/NotoSansKR-Bold.ttf"
+SUBTITLE_SIZE      = 34
 SUBTITLE_COLOR     = "white"
 SUBTITLE_BOX_COLOR = "0x000000@0.55"
 SUBTITLE_Y_BASE    = "h-160"
 
+
+# ── BGM ───────────────────────────────────────────────────────────────────
 
 def download_bgm(save_path: str):
     if os.path.exists(save_path):
@@ -26,6 +28,8 @@ def download_bgm(save_path: str):
     urllib.request.urlretrieve(BGM_URL, save_path)
     print(f"  [bgm] 완료: {save_path}")
 
+
+# ── 오디오 길이 ────────────────────────────────────────────────────────────
 
 def get_audio_duration(mp3_path: str) -> float:
     cmd = [
@@ -40,6 +44,8 @@ def get_audio_duration(mp3_path: str) -> float:
     except Exception:
         return 3.0
 
+
+# ── 텍스트 변환 ────────────────────────────────────────────────────────────
 
 def _escape(text: str) -> str:
     """ffmpeg drawtext용 이스케이프"""
@@ -101,8 +107,7 @@ def _narration_to_subtitle(text: str) -> str:
                 dec_part = korean_to_arabic(parts[1])
                 return f"{int_part}.{dec_part}%"
             else:
-                num = korean_to_arabic(kor)
-                return f"{num}%"
+                return f"{korean_to_arabic(kor)}%"
         except Exception:
             return m.group(0)
 
@@ -116,11 +121,8 @@ def _narration_to_subtitle(text: str) -> str:
         except Exception:
             return m.group(0)
 
-    # 퍼센트 변환: "삼점오퍼센트" → "3.5%", "이퍼센트" → "2%"
     text = re.sub(r'([가-힣]+)퍼센트', replace_percent, text)
-    # 원화 변환: "육만오천원" → "65,000원"
     text = re.sub(r'([가-힣]+)원', replace_won, text)
-    # 발음 표기 → 표준어
     text = text.replace('주까', '주가')
     text = text.replace('신고까', '신고가')
     text = text.replace('고까', '고가')
@@ -133,6 +135,8 @@ def _narration_to_subtitle(text: str) -> str:
     return text
 
 
+# ── 섹션 영상 생성 ─────────────────────────────────────────────────────────
+
 def build_section_video(
     png_path: str,
     mp3_path: str,
@@ -140,14 +144,11 @@ def build_section_video(
     out_path: str,
     font_path: str
 ) -> bool:
-    """PNG + MP3 → 섹션 mp4 (자막 중앙 고정, 오디오 길이 기준 체인징)"""
+    """PNG + MP3 → 섹션 mp4 (자막 하단 중앙 고정)"""
     duration = get_audio_duration(mp3_path)
     safe_sub = _escape(subtitle)
-
     font_part = f"fontfile={font_path}:" if os.path.exists(font_path) else ""
 
-    # 자막: 좌우 10% 여백, 하단 중앙 고정 (롤링 없음)
-    # 텍스트가 w*0.80 초과 시 자동 줄바꿈을 위해 box 너비 제한
     drawtext = (
         f"drawtext={font_part}"
         f"text='{safe_sub}':"
@@ -161,17 +162,13 @@ def build_section_video(
 
     cmd = [
         "ffmpeg", "-y",
-        "-loop", "1",
-        "-i", png_path,
+        "-loop", "1", "-i", png_path,
         "-i", mp3_path,
         "-vf", drawtext,
-        "-c:v", "libx264",
-        "-tune", "stillimage",
-        "-c:a", "aac",
-        "-b:a", "192k",
+        "-c:v", "libx264", "-tune", "stillimage",
+        "-c:a", "aac", "-b:a", "192k",
         "-pix_fmt", "yuv420p",
-        "-shortest",
-        "-t", str(duration),
+        "-shortest", "-t", str(duration),
         out_path
     ]
 
@@ -184,6 +181,8 @@ def build_section_video(
     print(f"  ✅ {os.path.basename(out_path)} ({duration:.1f}초)")
     return True
 
+
+# ── 영상 합치기 ────────────────────────────────────────────────────────────
 
 def concat_videos(video_list: list, out_path: str) -> bool:
     list_file = out_path.replace(".mp4", "_list.txt")
@@ -210,20 +209,18 @@ def concat_videos(video_list: list, out_path: str) -> bool:
     return True
 
 
+# ── BGM 믹싱 ──────────────────────────────────────────────────────────────
+
 def mix_bgm(video_path: str, bgm_path: str, out_path: str) -> bool:
     cmd = [
         "ffmpeg", "-y",
         "-i", video_path,
-        "-stream_loop", "-1",
-        "-i", bgm_path,
+        "-stream_loop", "-1", "-i", bgm_path,
         "-filter_complex",
         f"[1:a]volume={BGM_VOLUME}[bgm];"
         f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-        "-map", "0:v",
-        "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
         "-shortest",
         out_path
     ]
@@ -237,7 +234,13 @@ def mix_bgm(video_path: str, bgm_path: str, out_path: str) -> bool:
     return True
 
 
-def _resolve_section_id(frame_stem: str, sections: list) -> str:
+# ── 오디오 ID 결정 (화면별 분리) ──────────────────────────────────────────
+
+def _resolve_audio_id(frame_stem: str, sections: list) -> str:
+    """
+    프레임 파일명으로부터 오디오 파일명(확장자 제외)을 결정합니다.
+    stock_/hidden_ 종목은 화면별 suffix(_summary/_chart/_mention)를 붙입니다.
+    """
     fixed = {
         "opening":     "opening",
         "market":      "market_summary",
@@ -249,16 +252,61 @@ def _resolve_section_id(frame_stem: str, sections: list) -> str:
         if key in frame_stem:
             return sid
 
+    suffix_map = {
+        "_1_summary": "_summary",
+        "_2_chart":   "_chart",
+        "_3_mention": "_mention",
+    }
     for sec in sections:
         sid = sec.get("id", "")
         if not (sid.startswith("stock_") or sid.startswith("hidden_")):
             continue
         name = sid.replace("stock_", "").replace("hidden_", "")
-        if name and name in frame_stem:
-            return sid
+        if not name or name not in frame_stem:
+            continue
+        for frame_suffix, audio_suffix in suffix_map.items():
+            if frame_suffix in frame_stem:
+                return f"{sid}{audio_suffix}"
+        return sid
 
     return sections[0].get("id", "opening") if sections else "opening"
 
+
+# ── 자막 텍스트 결정 (화면별 분리) ────────────────────────────────────────
+
+def _resolve_subtitle(frame_stem: str, sections: list) -> str:
+    """프레임에 맞는 자막 텍스트를 반환합니다."""
+    for sec in sections:
+        sid = sec.get("id", "")
+        if not (sid.startswith("stock_") or sid.startswith("hidden_")):
+            continue
+        name = sid.replace("stock_", "").replace("hidden_", "")
+        if not name or name not in frame_stem:
+            continue
+        if "_1_summary" in frame_stem:
+            return sec.get("narration_summary", sec.get("narration", ""))
+        elif "_2_chart" in frame_stem:
+            return sec.get("narration_chart", sec.get("narration", ""))
+        elif "_3_mention" in frame_stem:
+            return sec.get("narration_mention", sec.get("narration", ""))
+        return sec.get("narration", "")
+
+    fixed = {
+        "opening":     "opening",
+        "market":      "market_summary",
+        "sector":      "sectors",
+        "ai_strategy": "ai_strategy",
+        "closing":     "closing",
+    }
+    for key, sid in fixed.items():
+        if key in frame_stem:
+            for sec in sections:
+                if sec.get("id") == sid:
+                    return sec.get("narration", "")
+    return ""
+
+
+# ── 무음 오디오 생성 ──────────────────────────────────────────────────────
 
 def _make_silent_audio(tmp_dir: str, name: str) -> str:
     path = os.path.join(tmp_dir, f"silent_{name}.mp3")
@@ -270,6 +318,8 @@ def _make_silent_audio(tmp_dir: str, name: str) -> str:
         ], capture_output=True)
     return path
 
+
+# ── 메인 실행 ─────────────────────────────────────────────────────────────
 
 def run(lang: str = "KO"):
     lang = lang.upper()
@@ -300,8 +350,6 @@ def run(lang: str = "KO"):
     frames = asset_map.get("frames", [])
     print(f"📂 프레임 수: {len(frames)}")
 
-    narration_map = {sec.get("id", ""): sec.get("narration", "") for sec in sections}
-
     download_bgm(bgm_path)
 
     section_videos = []
@@ -311,15 +359,13 @@ def run(lang: str = "KO"):
         frame_name = os.path.basename(frame_path)
         frame_stem = os.path.splitext(frame_name)[0]
 
-        sec_id    = _resolve_section_id(frame_stem, sections)
-        mp3_path  = os.path.join(audio_dir, f"{sec_id}.mp3")
-        narration = narration_map.get(sec_id, "")
-
-        # 자막: 아라비아 숫자 + 표준어로 변환 (소리는 그대로 유지)
+        audio_id  = _resolve_audio_id(frame_stem, sections)
+        mp3_path  = os.path.join(audio_dir, f"{audio_id}.mp3")
+        narration = _resolve_subtitle(frame_stem, sections)
         subtitle  = _narration_to_subtitle(narration)
 
         if not os.path.isfile(mp3_path):
-            print(f"  ⚠️ MP3 없음 → 무음: {sec_id}")
+            print(f"  ⚠️ MP3 없음 → 무음: {audio_id}")
             mp3_path = _make_silent_audio(video_dir, frame_stem)
 
         out_video = os.path.join(video_dir, f"{frame_stem}.mp4")
