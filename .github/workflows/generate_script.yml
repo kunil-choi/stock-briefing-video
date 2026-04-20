@@ -21,7 +21,7 @@ jobs:
 
       - name: 📦 패키지 설치
         run: |
-          pip install openai playwright
+          pip install openai playwright Pillow
           playwright install chromium
 
       - name: 📝 원고 생성
