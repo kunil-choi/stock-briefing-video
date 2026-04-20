@@ -114,12 +114,23 @@ def new_frame() -> Image.Image:
 # ── 상단 바 ────────────────────────────────────────────────────────────────
 
 def draw_topbar(draw: ImageDraw.ImageDraw, label: str, color=None):
-    """상단 바를 그립니다."""
+    """상단 바를 그립니다. 이모지 제거 후 텍스트만 렌더링."""
     from datetime import date
+    import re
     bar_color = color or C.get("bar", (20, 22, 60))
     draw.rectangle([0, 0, W, 74], fill=bar_color)
     draw.line([0, 74, W, 74], fill=C["gold"], width=2)
-    draw.text((30, 18), label, font=fnt(36, bold=True), fill=C["white"])
+
+    # 이모지 제거 (유니코드 이모지 범위 전체 제거)
+    clean_label = re.sub(
+        r'[\U00010000-\U0010ffff'
+        r'\U0001F300-\U0001F9FF'
+        r'\u2600-\u26FF'
+        r'\u2700-\u27BF]',
+        '', label
+    ).strip()
+
+    draw.text((30, 18), clean_label, font=fnt(36, bold=True), fill=C["white"])
     date_str = date.today().strftime("%Y.%m.%d")
     draw.text((W - 30, 20), date_str, font=fnt(28, bold=False),
               fill=C["gold"], anchor="ra")
