@@ -51,6 +51,7 @@ def text_to_speech(text: str, output_path: str) -> bool:
         print(f"  ❌ 오류: {response.status_code} - {response.text}")
         return False
 
+
 # ─────────────────────────────────────────────
 # 전체 섹션 더빙
 # ─────────────────────────────────────────────
@@ -75,10 +76,16 @@ def run():
     audio_files   = []
 
     for i, section in enumerate(sections, 1):
-        sid       = section["id"]
-        label     = section["label"]
-        narration = section["narration"]
-        out_path  = f"output/KO/audio/{sid}.mp3"
+        sid       = section.get("id", "")
+        label     = section.get("label", "")
+        narration = section.get("narration", "")
+
+        # ── sid가 비어 있으면 건너뜀 ──────────────────────────────────────
+        if not sid:
+            print(f"  ⚠️ [{i}/{total}] id가 비어 있어 건너뜀 (label: {label})")
+            continue
+
+        out_path = f"output/KO/audio/{sid}.mp3"
 
         print(f"  [{i}/{total}] {label}")
         print(f"    내레이션: {narration[:40]}...")
@@ -114,6 +121,7 @@ def run():
     print(f"   성공: {success_count}/{total}개")
     print(f"   저장 위치: output/KO/audio/")
     print(f"{'='*40}\n")
+
 
 if __name__ == "__main__":
     run()
