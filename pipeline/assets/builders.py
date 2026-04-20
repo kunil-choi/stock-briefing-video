@@ -10,6 +10,9 @@ from .drawing import (
 from .chart import build_chart_image
 from .image_fetch import fetch_news_image
 
+# 텍스트가 그려질 수 있는 최대 y 좌표 (하단 바 위쪽 여유 포함)
+Y_MAX = H - 80
+
 
 def _save(img, path):
     img.save(path)
@@ -42,7 +45,6 @@ def build_opening(data, out_dir):
         alpha = int(15 * (1 - i / H))
         draw.line([0, i, W, i], fill=(30 + alpha, 32 + alpha, 80 + alpha))
 
-    title = sec.get("narration", data.get("title", "AI 주식 브리핑")).split(".")[0]
     date_str = data.get("date", "")
     keywords = sec.get("keywords", [])
 
@@ -59,7 +61,6 @@ def build_opening(data, out_dir):
     draw.line([W // 2 - 200, cy, W // 2 + 200, cy], fill=C["gold"], width=3)
     cy += 32
 
-    # 키워드 뱃지
     if keywords:
         total_w = sum(len(k) * 22 + 60 for k in keywords[:4]) + 20
         kx = (W - total_w) // 2
@@ -79,9 +80,8 @@ def build_market_summary(data, out_dir):
     draw_topbar(draw, "📈 시장 개요")
 
     y = 110
-    # ── KOSPI: 실제 키는 kospi_value / kospi_change ──────────────────────
-    kospi = sec.get("kospi_value", "")
-    change = sec.get("kospi_change", "")
+    kospi    = sec.get("kospi_value", "")
+    change   = sec.get("kospi_change", "")
     positive = sec.get("kospi_change_positive", True)
 
     if kospi:
@@ -100,16 +100,16 @@ def build_market_summary(data, out_dir):
     draw_divider(draw, y)
     y += 24
 
-    # ── 내레이션 요약 (첫 문장만) ────────────────────────────────────────
     narration = sec.get("narration", "")
-    if narration:
+    if narration and y < Y_MAX:
         first_sentence = narration.split(".")[0] + "."
         y = draw_wrapped_text(draw, first_sentence, 60, y, W - 120, size=32, line_gap=14)
         y += 8
 
-    # ── 포인트: 실제 키는 points ─────────────────────────────────────────
     points = sec.get("points", [])
     for point in points[:5]:
+        if y >= Y_MAX:
+            break
         draw.ellipse([60, y + 12, 76, y + 28], fill=C["gold"])
         y = draw_wrapped_text(draw, str(point), 96, y, W - 160, size=30, line_gap=10)
 
@@ -130,7 +130,6 @@ def build_sector(data, out_dir):
     gold_underline(draw, 60, y, "핵심 투자 섹터", size=48)
     y += 90
 
-    # ── 실제 키는 sector_list ────────────────────────────────────────────
     sector_list = sec.get("sector_list", sec.get("sectors", sec.get("list", [])))
 
     palette = [C["gold"], C["green"], C["blue"], (220, 100, 220), C["red"], (100, 220, 220)]
@@ -147,6 +146,8 @@ def build_sector(data, out_dir):
 
         card_x = 60 + (idx % 2) * (W // 2)
         card_y = y + (idx // 2) * 168
+        if card_y + 138 > Y_MAX:
+            break
         draw.rounded_rectangle(
             [card_x, card_y, card_x + W // 2 - 80, card_y + 138],
             radius=16, fill=C["card"]
@@ -169,23 +170,21 @@ def build_sector(data, out_dir):
 # ── 종목 카드 ────────────────────────────────────────────────────────────────
 
 def _build_stock_summary(sec, out_path, img_dir):
-    # ── GPT 생성 JSON: data 서브키 없음, 최상위 레벨에 바로 있음 ──────────
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    price   = sec.get("price", "")
-    change  = sec.get("change", "")
-    positive = sec.get("change_positive", True)
-    summary  = sec.get("summary", "")
-    catalysts = sec.get("catalysts", [])
-    risks     = sec.get("risks", [])
+    price      = sec.get("price", "")
+    change     = sec.get("change", "")
+    positive   = sec.get("change_positive", True)
+    summary    = sec.get("summary", "")
+    catalysts  = sec.get("catalysts", [])
+    risks      = sec.get("risks", [])
 
-    img = new_frame()
+    img  = new_frame()
     draw = ImageDraw.Draw(img)
     is_hidden = sec.get("id", "").startswith("hidden_")
     bar_color = C.get("hidden_accent", (80, 30, 120)) if is_hidden else None
     draw_topbar(draw, f"{'🔒 히든종목' if is_hidden else '📌 종목 분석'}: {stock_name}",
                 color=bar_color)
 
-    # 뉴스 이미지 (우측)
     img_path = fetch_news_image(stock_name, img_dir, [])
     if img_path:
         paste_image(img, img_path, (W - 520, 84, W - 44, 460))
@@ -194,12 +193,12 @@ def _build_stock_summary(sec, out_path, img_dir):
     draw.text((60, y), stock_name, font=fnt(56, bold=True), fill=C["white"])
     y += 68
 
-    if summary:
+    if summary and y < Y_MAX:
         y = draw_wrapped_text(draw, summary, 60, y, W - 580, size=28,
                               bold=False, color=(180, 180, 210), line_gap=8)
         y += 4
 
-    if price:
+    if price and y < Y_MAX:
         draw.text((60, y), f"₩ {price}", font=fnt(48, bold=True), fill=C["gold"])
         if change:
             try:
@@ -210,22 +209,25 @@ def _build_stock_summary(sec, out_path, img_dir):
             draw.text((cx, y + 6), change, font=fnt(36, bold=True), fill=change_color)
         y += 68
 
-    draw_divider(draw, y)
-    y += 24
+    if y < Y_MAX:
+        draw_divider(draw, y)
+        y += 24
 
-    # 촉매
-    if catalysts:
+    if catalysts and y < Y_MAX:
         draw.text((60, y), "📈 투자 포인트", font=fnt(32, bold=True), fill=C["green"])
         y += 46
         for c in catalysts[:4]:
+            if y >= Y_MAX:
+                break
             y = draw_wrapped_text(draw, f"• {c}", 80, y, W - 600, size=27, line_gap=8)
 
     y += 12
-    # 리스크
-    if risks:
+    if risks and y < Y_MAX:
         draw.text((60, y), "⚠️ 리스크", font=fnt(32, bold=True), fill=C["red"])
         y += 46
         for r in risks[:3]:
+            if y >= Y_MAX:
+                break
             y = draw_wrapped_text(draw, f"• {r}", 80, y, W - 600, size=27, line_gap=8)
 
     draw_bottombar(draw, stock_name)
@@ -234,7 +236,7 @@ def _build_stock_summary(sec, out_path, img_dir):
 
 def _build_stock_chart(sec, out_path, img_dir):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    img = new_frame()
+    img  = new_frame()
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, f"📊 최근 2주 차트: {stock_name}", color=(20, 55, 30))
 
@@ -251,29 +253,32 @@ def _build_stock_chart(sec, out_path, img_dir):
 
 def _build_mention_page(sec, out_path, page_idx):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    mentions = sec.get("mentions", [])
+    mentions   = sec.get("mentions", [])
 
-    img = new_frame()
+    img  = new_frame()
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, f"💬 전문가 멘션: {stock_name}", color=(40, 20, 60))
 
     if not mentions:
         narration = sec.get("narration", "")
-        mentions = [{"source": "브리핑 요약", "reporter": "", "quote": narration}] if narration else []
+        mentions  = [{"source": "브리핑 요약", "reporter": "", "quote": narration}] if narration else []
 
     y = 110
     page_mentions = mentions[page_idx * 3: page_idx * 3 + 3]
 
     for m in page_mentions:
+        if y >= Y_MAX:
+            break
         if isinstance(m, str):
             m = {"source": "", "reporter": "", "quote": m}
 
         source   = m.get("source", m.get("channel", ""))
         reporter = m.get("reporter", m.get("analyst", m.get("speaker", "")))
-        # ── 실제 키는 quote ──────────────────────────────────────────────
         content  = m.get("quote", m.get("report", m.get("content", m.get("comment", ""))))
 
         card_h = 210
+        if y + card_h > Y_MAX:
+            card_h = Y_MAX - y
         draw.rounded_rectangle([60, y, W - 60, y + card_h], radius=14, fill=C["card"])
         draw.rounded_rectangle([60, y, 68, y + card_h], radius=4, fill=C["gold"])
 
@@ -306,7 +311,7 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
 
 def build_ai_strategy(data, out_dir):
     sec = _find_section(data.get("sections", []), "ai_strategy")
-    img = new_frame()
+    img  = new_frame()
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, "🤖 AI 투자 전략", color=(40, 20, 70))
 
@@ -314,14 +319,14 @@ def build_ai_strategy(data, out_dir):
     gold_underline(draw, 60, y, "AI 분석 종합 전략", size=48)
     y += 90
 
-    # ── 실제 키는 bullet_points ──────────────────────────────────────────
     bullet_points = sec.get("bullet_points", sec.get("strategies", sec.get("items", [])))
 
     for bp in bullet_points[:6]:
+        if y + 114 > Y_MAX:
+            break
         text = bp if isinstance(bp, str) else bp.get("strategy", bp.get("content", str(bp)))
         draw.rounded_rectangle([60, y, W - 60, y + 100], radius=12, fill=C["card"])
 
-        # "종목명 — 전략" 형식 파싱
         if " — " in text:
             stock_part, strat_part = text.split(" — ", 1)
             draw.text((90, y + 14), stock_part.strip(),
@@ -339,8 +344,8 @@ def build_ai_strategy(data, out_dir):
 # ── 클로징 ──────────────────────────────────────────────────────────────────
 
 def build_closing(data, out_dir):
-    sec = _find_section(data.get("sections", []), "closing")
-    img = new_frame()
+    sec  = _find_section(data.get("sections", []), "closing")
+    img  = new_frame()
     draw = ImageDraw.Draw(img)
 
     for i in range(H):
@@ -356,8 +361,9 @@ def build_closing(data, out_dir):
     cy += 64
     disclaimer = sec.get("disclaimer",
                           "본 영상은 AI가 생성한 참고용 정보이며, 투자 권유가 아닙니다.")
-    # disclaimer 줄바꿈 처리
     for line in disclaimer.split("\\n"):
+        if cy >= Y_MAX:
+            break
         draw.text((W // 2, cy), line.strip(),
                   font=fnt(26, bold=False), fill=(150, 150, 170), anchor="mm")
         cy += 36
