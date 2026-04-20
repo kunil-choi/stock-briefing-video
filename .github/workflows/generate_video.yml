@@ -1,0 +1,93 @@
+name: 🎬 Generate Video
+
+on:
+  workflow_run:
+    workflows: ["🖼️ Generate Assets"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 🐍 Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 🔤 한글 폰트 설치
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-noto-cjk ffmpeg
+          fc-cache -fv
+
+      - name: 📦 패키지 설치
+        run: pip install requests
+
+      - name: 📥 script artifact 다운로드
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: generate_script.yml
+          name: generated-script-latest
+          path: output/KO/scripts/
+          if_no_artifact_found: fail
+          workflow_conclusion: success
+
+      - name: 📥 voice artifact 다운로드
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: generate_voice.yml
+          name: generated-voice-latest
+          path: output/KO/audio/
+          if_no_artifact_found: fail
+          workflow_conclusion: success
+
+      - name: 📥 assets artifact 다운로드
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: generate_assets.yml
+          name: generated-assets-${{ github.event.workflow_run.run_number }}
+          path: output/KO/frames/
+          if_no_artifact_found: warn
+          workflow_conclusion: success
+
+      - name: 📥 assets artifact 다운로드 (fallback)
+        if: failure()
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: generate_assets.yml
+          path: output/KO/frames/
+          if_no_artifact_found: fail
+          workflow_conclusion: success
+
+      - name: 🗂️ asset_map.json 생성
+        run: |
+          python3 - <<'EOF'
+import os, json, glob
+
+frames_dir = "output/KO/frames"
+frames = sorted(glob.glob(os.path.join(frames_dir, "*.png")))
+asset_map = {"frames": frames, "lang": "KO"}
+
+out_path = "output/KO/asset_map.json"
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(asset_map, f, ensure_ascii=False, indent=2)
+
+print(f"✅ asset_map.json 생성 완료 ({len(frames)}개 프레임)")
+EOF
+
+      - name: 🎬 동영상 생성
+        run: python pipeline/generate_video.py KO
+
+      - name: 💾 최종 영상 저장
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-video-${{ github.run_number }}
+          path: output/KO/video/final.mp4
+          retention-days: 30
