@@ -6,13 +6,15 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-from .config import C, STOCK_CODES
+from .config import C, STOCK_CODES, normalize_stock_name
 
 
 def fetch_ohlcv(stock_name: str, days: int = 20) -> Optional[pd.DataFrame]:
-    code = STOCK_CODES.get(stock_name)
+    # 종목명 정규화 후 코드 조회
+    normalized = normalize_stock_name(stock_name)
+    code = STOCK_CODES.get(normalized)
     if not code:
-        print(f"  [chart] 종목코드 없음: {stock_name}")
+        print(f"  [chart] 종목코드 없음: {stock_name} (정규화: {normalized})")
         return None
     try:
         from pykrx import stock as krx
@@ -117,11 +119,12 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
 
 
 def build_chart_image(stock_name: str, img_dir: str) -> Optional[str]:
-    save_path = os.path.join(img_dir, f"chart_{stock_name}.png")
+    normalized = normalize_stock_name(stock_name)
+    save_path = os.path.join(img_dir, f"chart_{normalized}.png")
     if os.path.exists(save_path):
-        print(f"  [chart] 캐시 사용: {stock_name}")
+        print(f"  [chart] 캐시 사용: {normalized}")
         return save_path
-    df = fetch_ohlcv(stock_name, days=14)
+    df = fetch_ohlcv(normalized, days=14)
     if df is None or len(df) < 3:
         return None
-    return draw_candle_chart(df, stock_name, save_path)
+    return draw_candle_chart(df, normalized, save_path)
