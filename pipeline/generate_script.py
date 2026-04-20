@@ -3,9 +3,13 @@ import json
 from datetime import datetime
 from openai import OpenAI
 from playwright.sync_api import sync_playwright
+from assets.config import STOCK_CODES, normalize_stock_name
 
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 TODAY = datetime.now().strftime("%Y년 %m월 %d일")
+
+# STOCK_CODES 키 목록을 프롬프트에 주입
+STOCK_NAME_LIST = "\n".join(f"- {name}" for name in STOCK_CODES.keys())
 
 
 def fetch_briefing():
@@ -31,6 +35,15 @@ def generate_script(briefing_text):
 당신은 경제 방송 작가입니다. 주식 브리핑 데이터를 분석하여 방송용 내레이션 원고와 화면 구성 데이터를 JSON으로 생성하세요.
 
 오늘 날짜: {TODAY}
+
+## 종목명 표기 규칙 (반드시 준수)
+종목명을 JSON의 id 필드에 사용할 때는 아래 목록의 정확한 표기를 그대로 사용하세요.
+띄어쓰기, 대소문자, 특수문자 하나도 변경하지 마세요.
+
+[허용 종목명 목록]
+{STOCK_NAME_LIST}
+
+위 목록에 없는 종목이 브리핑에 등장하면 가장 유사한 목록의 종목명을 사용하세요.
 
 ## 발음 규칙 (TTS용)
 - 숫자는 한글로: 6226 → 육천이백이십육, 3% → 삼퍼센트
@@ -127,6 +140,7 @@ def generate_script(briefing_text):
 ## 주의사항
 - stock_ 섹션은 브리핑의 관심종목 수만큼 생성 (id: stock_종목명)
 - hidden_ 섹션은 히든종목 수만큼 생성 (id: hidden_종목명)
+- 종목명은 반드시 위 [허용 종목명 목록]에서 정확히 그대로 가져올 것
 - mentions는 브리핑에 언급된 채널/증권사 정보 기반으로 작성
 - price와 change는 브리핑 데이터에서 추출
 - catalysts와 risks는 각 4개씩 작성
@@ -145,14 +159,27 @@ def generate_script(briefing_text):
 
     raw = response.choices[0].message.content.strip()
 
-    # 마크다운 코드블록 제거
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
     raw = raw.strip()
 
-    return json.loads(raw)
+    script = json.loads(raw)
+
+    # GPT가 혹시라도 다르게 표기한 종목명을 후처리로 정규화
+    for sec in script.get("sections", []):
+        sec_id = sec.get("id", "")
+        for prefix in ("stock_", "hidden_"):
+            if sec_id.startswith(prefix):
+                raw_name = sec_id[len(prefix):]
+                normalized = normalize_stock_name(raw_name)
+                if raw_name != normalized:
+                    print(f"  [정규화] {sec_id} → {prefix}{normalized}")
+                    sec["id"] = f"{prefix}{normalized}"
+                break
+
+    return script
 
 
 def main():
