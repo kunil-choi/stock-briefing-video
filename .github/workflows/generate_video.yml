@@ -51,11 +51,13 @@ jobs:
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: generate_assets.yml
-          path: output/KO/frames/
+          name_is_regexp: true
+          name: generated-assets-.*
+          path: output/KO/frames_raw/
           if_no_artifact_found: fail
           workflow_conclusion: success
 
-      - name: 🗂️ asset_map.json 생성
+      - name: 🗂️ frames 폴더 정리 및 asset_map.json 생성
         run: python pipeline/build_asset_map.py
 
       - name: 🎬 동영상 생성
