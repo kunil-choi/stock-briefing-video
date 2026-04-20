@@ -1,14 +1,20 @@
 import os
+import sys
 import json
 from datetime import datetime
 from openai import OpenAI
 from playwright.sync_api import sync_playwright
+
+# sys.path에 pipeline/ 추가 — assets 패키지 임포트 보장
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 from assets.config import STOCK_CODES, normalize_stock_name
 
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 TODAY = datetime.now().strftime("%Y년 %m월 %d일")
 
-# STOCK_CODES 키 목록을 프롬프트에 주입
 STOCK_NAME_LIST = "\n".join(f"- {name}" for name in STOCK_CODES.keys())
 
 
