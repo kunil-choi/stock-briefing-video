@@ -168,7 +168,7 @@ def build_section_video(
         "-c:v", "libx264", "-tune", "stillimage",
         "-c:a", "aac", "-b:a", "192k",
         "-pix_fmt", "yuv420p",
-        "-shortest", "-t", str(duration),
+        "-shortest", "-t", f"{duration:.3f}",
         out_path
     ]
 
@@ -257,13 +257,18 @@ def _resolve_audio_id(frame_stem: str, sections: list) -> str:
         "_2_chart":   "_chart",
         "_3_mention": "_mention",
     }
+
     for sec in sections:
         sid = sec.get("id", "")
         if not (sid.startswith("stock_") or sid.startswith("hidden_")):
             continue
         name = sid.replace("stock_", "").replace("hidden_", "")
-        if name and (frame_stem.startswith(name + "_") or f"_{name}_" in frame_stem):
+        if not name:
             continue
+        # 매칭 실패 시 다음 섹션으로
+        if not (frame_stem.startswith(name + "_") or f"_{name}_" in frame_stem):
+            continue
+        # 매칭 성공 → suffix 결정
         for frame_suffix, audio_suffix in suffix_map.items():
             if frame_suffix in frame_stem:
                 return f"{sid}{audio_suffix}"
@@ -281,7 +286,9 @@ def _resolve_subtitle(frame_stem: str, sections: list) -> str:
         if not (sid.startswith("stock_") or sid.startswith("hidden_")):
             continue
         name = sid.replace("stock_", "").replace("hidden_", "")
-        if not name or name not in frame_stem:
+        if not name:
+            continue
+        if not (frame_stem.startswith(name + "_") or f"_{name}_" in frame_stem):
             continue
         if "_1_summary" in frame_stem:
             return sec.get("narration_summary", sec.get("narration", ""))
