@@ -6,9 +6,9 @@ import time
 MODEL_ID = "eleven_multilingual_v2"
 
 VOICE_SETTINGS = {
-    "stability":         0.75,   # 0.55 → 0.75 (안정적이고 자연스러운 속도)
+    "stability":         0.75,
     "similarity_boost":  0.90,
-    "style":             0.00,   # 0.20 → 0.00 (인위적 강세/느림 제거)
+    "style":             0.00,
     "use_speaker_boost": True
 }
 
@@ -55,35 +55,61 @@ def run():
     with open(script_path, "r", encoding="utf-8") as f:
         script = json.load(f)
 
-    sections = script["sections"]
-    total    = len(sections)
+    sections   = script["sections"]
+    total_jobs = 0
+    jobs       = []  # (narration_text, output_path, label)
 
-    print(f"\n🎙️ 더빙 시작 — 총 {total}개 섹션\n")
+    # 더빙 작업 목록 구성
+    for section in sections:
+        sid   = section.get("id", "")
+        label = section.get("label", "")
+        if not sid:
+            continue
+
+        is_stock = sid.startswith("stock_") or sid.startswith("hidden_")
+
+        if is_stock:
+            # 화면별 narration 3개 분리 생성
+            for suffix, field in [
+                ("_summary", "narration_summary"),
+                ("_chart",   "narration_chart"),
+                ("_mention", "narration_mention"),
+            ]:
+                text = section.get(field, section.get("narration", ""))
+                if text:
+                    jobs.append((
+                        text,
+                        f"output/KO/audio/{sid}{suffix}.mp3",
+                        f"{label} [{suffix.strip('_')}]"
+                    ))
+        else:
+            # 일반 섹션: narration 하나
+            narration = section.get("narration", "")
+            if narration:
+                jobs.append((
+                    narration,
+                    f"output/KO/audio/{sid}.mp3",
+                    label
+                ))
+
+    total = len(jobs)
+    print(f"\n🎙️ 더빙 시작 — 총 {total}개 오디오\n")
 
     success_count = 0
     audio_files   = []
 
-    for i, section in enumerate(sections, 1):
-        sid       = section.get("id", "")
-        label     = section.get("label", "")
-        narration = section.get("narration", "")
-
-        if not sid:
-            print(f"  ⚠️ [{i}/{total}] id 없음 건너뜀")
-            continue
-
-        out_path = f"output/KO/audio/{sid}.mp3"
+    for i, (text, out_path, label) in enumerate(jobs, 1):
         print(f"  [{i}/{total}] {label}")
-        print(f"    내레이션: {narration[:40]}...")
+        print(f"    내레이션: {text[:40]}...")
 
-        success = text_to_speech(narration, out_path)
+        success = text_to_speech(text, out_path)
 
         if success:
             print(f"    ✅ 완료 → {out_path}")
             success_count += 1
-            audio_files.append({"id": sid, "label": label, "path": out_path})
+            audio_files.append({"label": label, "path": out_path})
         else:
-            print(f"    ❌ 실패 → {sid}")
+            print(f"    ❌ 실패 → {out_path}")
 
         time.sleep(1)
 
