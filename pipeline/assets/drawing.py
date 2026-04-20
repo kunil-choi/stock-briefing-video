@@ -1,16 +1,15 @@
 # pipeline/assets/drawing.py
 import os
 import subprocess
-from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 from .config import W, H, C, FONT_PATHS
 
-@lru_cache(maxsize=32)
-def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
-    # ── 1단계: config.py FONT_PATHS ──────────────────────────────────────
-    candidates = list(FONT_PATHS["bold"] if bold else FONT_PATHS["regular"])  # 버그1 수정
 
-    # ── 2단계: fc-list로 시스템 CJK 폰트 탐색 ────────────────────────────
+def _find_font(bold: bool) -> str | None:
+    """사용 가능한 폰트 경로를 탐색하여 반환"""
+    candidates = list(FONT_PATHS["bold"] if bold else FONT_PATHS["regular"])
+
+    # fc-list로 시스템 CJK 폰트 탐색
     try:
         result = subprocess.run(
             ["fc-list", ":lang=ko", "--format=%{file}\n"],
@@ -28,7 +27,7 @@ def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
     except Exception:
         pass
 
-    # ── 3단계: 알려진 경로 하드코딩 ──────────────────────────────────────
+    # 알려진 경로 하드코딩
     known = [
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -43,7 +42,7 @@ def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
         "/Library/Fonts/NanumGothic.ttf",
     ]
     if bold:
-        candidates += [p for p in known if "Bold" in p or "bold" in p]  # 버그2 수정
+        candidates += [p for p in known if "Bold" in p or "bold" in p]
         candidates += [p for p in known if "Bold" not in p and "bold" not in p]
     else:
         candidates += [p for p in known if "Bold" not in p and "bold" not in p]
@@ -51,13 +50,47 @@ def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
 
     for path in candidates:
         if path and os.path.isfile(path):
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
+            return path
 
-    print(f"  ⚠️  폰트를 찾지 못했습니다 (size={size}). 기본 폰트로 대체합니다.")
-    return ImageFont.load_default()
+    return None
+
+
+# 폰트 경로를 프로세스 시작 시 한 번만 탐색해서 고정
+_FONT_PATH_BOLD    = _find_font(bold=True)
+_FONT_PATH_REGULAR = _find_font(bold=False)
+
+if _FONT_PATH_BOLD:
+    print(f"  [font] Bold 폰트: {_FONT_PATH_BOLD}")
+else:
+    print("  ⚠️  Bold 폰트를 찾지 못했습니다. 기본 폰트로 대체합니다.")
+
+if _FONT_PATH_REGULAR:
+    print(f"  [font] Regular 폰트: {_FONT_PATH_REGULAR}")
+else:
+    print("  ⚠️  Regular 폰트를 찾지 못했습니다. 기본 폰트로 대체합니다.")
+
+# 폰트 캐시 — 고정된 경로 기반이므로 lru_cache 없이 dict로 안전하게 관리
+_font_cache: dict = {}
+
+
+def fnt(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    key = (size, bold)
+    if key in _font_cache:
+        return _font_cache[key]
+
+    path = _FONT_PATH_BOLD if bold else _FONT_PATH_REGULAR
+    if path:
+        try:
+            font = ImageFont.truetype(path, size)
+            _font_cache[key] = font
+            return font
+        except Exception as e:
+            print(f"  ⚠️  폰트 로드 실패 ({path}, size={size}): {e}")
+
+    print(f"  ⚠️  폰트를 찾지 못했습니다 (size={size}, bold={bold}). 기본 폰트로 대체합니다.")
+    fallback = ImageFont.load_default()
+    _font_cache[key] = fallback
+    return fallback
 
 
 def new_frame() -> Image.Image:
