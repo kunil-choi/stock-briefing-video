@@ -7,9 +7,7 @@ import time
 # 설정
 # ─────────────────────────────────────────────
 
-ELEVENLABS_API_KEY = os.environ["ELEVENLABS_API_KEY"]
-VOICE_ID           = os.environ["ELEVENLABS_VOICE_ID"]
-MODEL_ID           = "eleven_multilingual_v2"
+MODEL_ID = "eleven_multilingual_v2"
 
 VOICE_SETTINGS = {
     "stability":         0.55,
@@ -23,11 +21,18 @@ VOICE_SETTINGS = {
 # ─────────────────────────────────────────────
 
 def text_to_speech(text: str, output_path: str) -> bool:
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{VOICE_ID}"
+    api_key  = os.environ.get("ELEVENLABS_API_KEY", "")
+    voice_id = os.environ.get("ELEVENLABS_VOICE_ID", "")
+
+    if not api_key or not voice_id:
+        print("  ❌ ELEVENLABS_API_KEY 또는 ELEVENLABS_VOICE_ID 환경변수가 없습니다.")
+        return False
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
         "Accept":       "audio/mpeg",
         "Content-Type": "application/json",
-        "xi-api-key":   ELEVENLABS_API_KEY
+        "xi-api-key":   api_key
     }
     payload = {
         "text":           text,
@@ -51,7 +56,12 @@ def text_to_speech(text: str, output_path: str) -> bool:
 # ─────────────────────────────────────────────
 
 def run():
-    # 원고 로드
+    # 환경변수 사전 체크
+    if not os.environ.get("ELEVENLABS_API_KEY"):
+        raise EnvironmentError("❌ ELEVENLABS_API_KEY 환경변수가 설정되지 않았습니다.")
+    if not os.environ.get("ELEVENLABS_VOICE_ID"):
+        raise EnvironmentError("❌ ELEVENLABS_VOICE_ID 환경변수가 설정되지 않았습니다.")
+
     script_path = "output/KO/scripts/script.json"
     with open(script_path, "r", encoding="utf-8") as f:
         script = json.load(f)
@@ -86,10 +96,8 @@ def run():
         else:
             print(f"    ❌ 실패 → {sid}")
 
-        # API 요청 간격 (과부하 방지)
         time.sleep(1)
 
-    # ── 결과 요약 저장
     summary = {
         "total":   total,
         "success": success_count,
@@ -97,6 +105,7 @@ def run():
         "files":   audio_files
     }
     summary_path = "output/KO/audio/summary.json"
+    os.makedirs(os.path.dirname(summary_path), exist_ok=True)
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
