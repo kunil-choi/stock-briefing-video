@@ -71,32 +71,31 @@ def generate_script(briefing_text):
 위 목록에 없는 종목이 등장하면 가장 유사한 목록의 종목명을 사용하세요.
 
 ## 발음 규칙 (TTS용)
-- 숫자는 한글로: 6226 → 육천이백이십육, 3% → 삼퍼센트
+- 숫자는 한글로: 65400 → 육만오천사백, 3% → 삼퍼센트
 - 주가 관련: 주가→주까, 신고가→신고까, 고가→고까, 저가→저까
 - 영어는 한글 발음: KOSPI→코스피, HBM→에이치비엠, ETF→이티에프
 - 자연스럽고 명확한 구어체, 불필요한 간투어 없이
 
-## narration 작성 규칙
-각 섹션의 narration은 아나운서가 실제로 읽을 방송 멘트 전체를 작성합니다.
-각 코너 시작 시 반드시 아래 코너 도입 멘트를 narration 맨 앞에 포함하세요.
+## 화면별 narration 분리 규칙 (핵심 — 반드시 준수)
+stock_/hidden_ 섹션은 화면이 3개로 분리됩니다.
+각 화면에 맞는 narration을 반드시 별도 필드로 작성하세요.
 
-- market_summary 코너 도입: "오늘의 주식시장 요약입니다."
-- sectors 코너 도입: "오늘의 주목할 섹터입니다."
-- 첫 번째 stock_ 코너 도입: "관심종목 브리핑 시작합니다. 첫 번째 종목은 [종목명]입니다."
-- 두 번째 이후 stock_ 코너: "다음은 [종목명]입니다."
-- 첫 번째 hidden_ 코너 도입: "채널 언급은 한 번이었지만 주목할 종목을 소개해드립니다. [종목명]입니다."
-- 두 번째 이후 hidden_ 코너: "다음 주목 종목은 [종목명]입니다."
-- ai_strategy 코너 도입: "마지막으로 AI가 제안하는 오늘의 투자전략입니다."
+narration_summary (종목 소개 화면):
+  - 코너 도입 멘트 + 종목 한 줄 소개 + 현재 주까와 등락률
+  - 예: "다음은 삼성전자입니다. 삼성전자는 글로벌 반도체 및 전자기기 제조 기업입니다. 현재 주까는 육만오천사백원으로 전일 대비 플러스 일점이퍼센트 상승했습니다."
 
-## stock_/hidden_ 섹션 narration 구성 (순서 준수)
-1. 코너 도입 멘트
-2. 종목 한 줄 소개 (summary)
-3. 현재 주까와 등락률 언급
-4. 상승 촉매 항목들을 자연스럽게 이어서 읽기
-5. 리스크 항목들 언급
-6. mentions에 있는 채널/증권사 언급 내용을 구체적으로 읽기
-   예시: "한국경제 기사에 따르면 미래에셋 김정진 이사가 삼성전자 SK하이닉스 투자비중 오십퍼센트까지 늘려도 된다며 추가매수를 권고했고, 수익률 상위 일퍼센트 고수들의 순매수 일위도 삼성전자였습니다."
-   → mentions의 source, reporter/analyst, quote/report 내용을 이런 방식으로 자연스럽게 문장으로 읽어줄 것
+narration_chart (최근 2주 차트 화면):
+  - 최근 주까 흐름 + 상승 촉매 + 리스크
+  - 예: "최근 이주간 주까 흐름을 보겠습니다. 육만이천원에서 육만오천원까지 상승했습니다. 주요 상승 촉매로는 에이치비엠 수주 확대와 파운드리 회복 기대감이 있으며, 리스크로는 미중 무역 갈등 재점화 가능성이 있습니다."
+
+narration_mention (전문가 멘션 화면):
+  - mentions의 채널/기사/애널리스트 언급 내용만
+  - 예: "한국경제 기사에 따르면 미래에셋 김정진 이사가 삼성전자 에스케이하이닉스 투자비중 오십퍼센트까지 늘려도 된다며 추가매수를 권고했습니다."
+
+## 일반 섹션 narration 규칙
+- market_summary 도입: "오늘의 주식시장 요약입니다."
+- sectors 도입: "오늘의 주목할 섹터입니다."
+- ai_strategy 도입: "마지막으로 AI가 제안하는 오늘의 투자전략입니다."
 
 ## 출력 JSON 구조
 {{
@@ -129,7 +128,10 @@ def generate_script(briefing_text):
     {{
       "id": "stock_종목명",
       "label": "관심종목 - 종목명",
-      "narration": "관심종목 브리핑 시작합니다. 첫 번째 종목은 [종목명]입니다. [전체 브리핑 멘트]",
+      "narration": "[narration_summary 내용]",
+      "narration_summary": "코너 도입 + 종목 소개 + 현재 주까와 등락률",
+      "narration_chart": "최근 이주간 주까 흐름 + 상승 촉매 + 리스크",
+      "narration_mention": "전문가/채널/기사 언급 내용",
       "summary": "기업 한 줄 소개",
       "price": "000,000",
       "change": "+0.00%",
@@ -143,7 +145,10 @@ def generate_script(briefing_text):
     {{
       "id": "hidden_종목명",
       "label": "히든종목 - 종목명",
-      "narration": "채널 언급은 한 번이었지만 주목할 종목을 소개해드립니다. [종목명]입니다. [전체 브리핑 멘트]",
+      "narration": "[narration_summary 내용]",
+      "narration_summary": "코너 도입 + 종목 소개 + 현재 주까와 등락률",
+      "narration_chart": "최근 이주간 주까 흐름 + 상승 촉매 + 리스크",
+      "narration_mention": "전문가/채널/기사 언급 내용",
       "summary": "기업 한 줄 소개",
       "price": "000,000",
       "change": "+0.00%",
@@ -158,9 +163,7 @@ def generate_script(briefing_text):
       "id": "ai_strategy",
       "label": "AI 투자 전략",
       "narration": "마지막으로 AI가 제안하는 오늘의 투자전략입니다. [전략 내용]",
-      "bullet_points": [
-        "종목명 — 전략 내용"
-      ]
+      "bullet_points": ["종목명 — 전략 내용"]
     }},
     {{
       "id": "closing",
@@ -172,11 +175,10 @@ def generate_script(briefing_text):
 }}
 
 ## 주의사항
-- opening narration은 반드시 "__OPENING__" 그대로 출력 (후처리로 교체됨)
-- closing narration은 반드시 "__CLOSING__" 그대로 출력 (후처리로 교체됨)
-- stock_ 섹션은 브리핑의 관심종목 수만큼 생성
-- hidden_ 섹션은 히든종목 수만큼 생성
-- mentions 내용은 구체적인 문장으로 narration에 녹여서 작성
+- opening narration은 반드시 "__OPENING__" 그대로 출력
+- closing narration은 반드시 "__CLOSING__" 그대로 출력
+- stock_/hidden_ 섹션은 narration_summary, narration_chart, narration_mention 세 필드를 반드시 모두 작성
+- narration 필드는 narration_summary 와 동일하게 작성
 - 반드시 순수 JSON만 출력, 마크다운 블록 없이
 """
 
