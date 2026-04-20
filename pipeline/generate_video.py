@@ -5,6 +5,7 @@ PNG 프레임 + MP3 오디오 → MP4
 import os
 import sys
 import json
+import re
 import subprocess
 import urllib.request
 
@@ -14,12 +15,7 @@ FONT_PATH     = "assets/fonts/NotoSansKR-Bold.ttf"
 SUBTITLE_SIZE = 34
 SUBTITLE_COLOR     = "white"
 SUBTITLE_BOX_COLOR = "0x000000@0.55"
-
-# 좌우 여백 10% → x 시작 = w*0.10, 텍스트 최대 너비 = w*0.80
-SUBTITLE_X_START = "w*0.10"
-SUBTITLE_MAX_W   = "w*0.80"
-# 하단 바(52px) + 여유 — 롤링 기준 y
-SUBTITLE_Y_BASE  = "h-160"
+SUBTITLE_Y_BASE    = "h-160"
 
 
 def download_bgm(save_path: str):
@@ -61,6 +57,82 @@ def _escape(text: str) -> str:
     )
 
 
+def _narration_to_subtitle(text: str) -> str:
+    """
+    narration(TTS용 한글 발음)을 자막용 텍스트로 변환합니다.
+    한글 숫자 표현을 아라비아 숫자로 역변환하고 발음용 표기를 표준어로 되돌립니다.
+    """
+    KOREAN_NUMS = {
+        '영': 0, '일': 1, '이': 2, '삼': 3, '사': 4,
+        '오': 5, '육': 6, '칠': 7, '팔': 8, '구': 9,
+        '십': 10, '백': 100, '천': 1000, '만': 10000,
+        '억': 100000000,
+    }
+
+    def korean_to_arabic(kor: str) -> str:
+        try:
+            result  = 0
+            current = 0
+            for ch in kor:
+                if ch not in KOREAN_NUMS:
+                    return kor
+                val = KOREAN_NUMS[ch]
+                if val >= 100000000:
+                    result += (current if current else 1) * val
+                    current = 0
+                elif val >= 10000:
+                    result += (current if current else 1) * val
+                    current = 0
+                elif val >= 10:
+                    current = (current if current else 1) * val
+                else:
+                    current += val
+            result += current
+            return str(result) if result > 0 else kor
+        except Exception:
+            return kor
+
+    def replace_percent(m):
+        kor = m.group(1)
+        try:
+            if '점' in kor:
+                parts    = kor.split('점', 1)
+                int_part = korean_to_arabic(parts[0])
+                dec_part = korean_to_arabic(parts[1])
+                return f"{int_part}.{dec_part}%"
+            else:
+                num = korean_to_arabic(kor)
+                return f"{num}%"
+        except Exception:
+            return m.group(0)
+
+    def replace_won(m):
+        kor = m.group(1)
+        try:
+            arabic = korean_to_arabic(kor)
+            if arabic != kor and arabic.isdigit():
+                return f"{int(arabic):,}원"
+            return m.group(0)
+        except Exception:
+            return m.group(0)
+
+    # 퍼센트 변환: "삼점오퍼센트" → "3.5%", "이퍼센트" → "2%"
+    text = re.sub(r'([가-힣]+)퍼센트', replace_percent, text)
+    # 원화 변환: "육만오천원" → "65,000원"
+    text = re.sub(r'([가-힣]+)원', replace_won, text)
+    # 발음 표기 → 표준어
+    text = text.replace('주까', '주가')
+    text = text.replace('신고까', '신고가')
+    text = text.replace('고까', '고가')
+    text = text.replace('저까', '저가')
+    text = text.replace('에이치비엠', 'HBM')
+    text = text.replace('이티에프', 'ETF')
+    text = text.replace('코스피', 'KOSPI')
+    text = text.replace('코스닥', 'KOSDAQ')
+
+    return text
+
+
 def build_section_video(
     png_path: str,
     mp3_path: str,
@@ -68,22 +140,21 @@ def build_section_video(
     out_path: str,
     font_path: str
 ) -> bool:
-    """PNG + MP3 → 섹션 mp4 (자막 롤링 포함)"""
+    """PNG + MP3 → 섹션 mp4 (자막 중앙 고정, 오디오 길이 기준 체인징)"""
     duration = get_audio_duration(mp3_path)
     safe_sub = _escape(subtitle)
 
     font_part = f"fontfile={font_path}:" if os.path.exists(font_path) else ""
 
-    # 자막 롤링: 텍스트가 오른쪽에서 왼쪽으로 흐름
-    # x = w - (w * 진행률) 형태로 duration 동안 좌우 10% 영역 안에서 스크롤
-    # 단, 짧은 텍스트는 중앙 고정
+    # 자막: 좌우 10% 여백, 하단 중앙 고정 (롤링 없음)
+    # 텍스트가 w*0.80 초과 시 자동 줄바꿈을 위해 box 너비 제한
     drawtext = (
         f"drawtext={font_part}"
         f"text='{safe_sub}':"
         f"fontsize={SUBTITLE_SIZE}:"
         f"fontcolor={SUBTITLE_COLOR}:"
         f"box=1:boxcolor={SUBTITLE_BOX_COLOR}:boxborderw=14:"
-        f"x=if(gt(text_w\\,w*0.80)\\, w*0.10 + (w*0.80 - text_w) * (t/{duration})\\, (w-text_w)/2):"
+        f"x=(w-text_w)/2:"
         f"y={SUBTITLE_Y_BASE}:"
         f"line_spacing=8"
     )
@@ -244,12 +315,15 @@ def run(lang: str = "KO"):
         mp3_path  = os.path.join(audio_dir, f"{sec_id}.mp3")
         narration = narration_map.get(sec_id, "")
 
+        # 자막: 아라비아 숫자 + 표준어로 변환 (소리는 그대로 유지)
+        subtitle  = _narration_to_subtitle(narration)
+
         if not os.path.isfile(mp3_path):
             print(f"  ⚠️ MP3 없음 → 무음: {sec_id}")
             mp3_path = _make_silent_audio(video_dir, frame_stem)
 
         out_video = os.path.join(video_dir, f"{frame_stem}.mp4")
-        ok = build_section_video(frame_path, mp3_path, narration, out_video, font_path)
+        ok = build_section_video(frame_path, mp3_path, subtitle, out_video, font_path)
         if ok:
             section_videos.append(out_video)
 
