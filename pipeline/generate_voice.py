@@ -3,22 +3,15 @@ import json
 import requests
 import time
 
-# ─────────────────────────────────────────────
-# 설정
-# ─────────────────────────────────────────────
-
 MODEL_ID = "eleven_multilingual_v2"
 
 VOICE_SETTINGS = {
-    "stability":         0.55,
+    "stability":         0.75,   # 0.55 → 0.75 (안정적이고 자연스러운 속도)
     "similarity_boost":  0.90,
-    "style":             0.20,
+    "style":             0.00,   # 0.20 → 0.00 (인위적 강세/느림 제거)
     "use_speaker_boost": True
 }
 
-# ─────────────────────────────────────────────
-# 텍스트 → 음성 변환
-# ─────────────────────────────────────────────
 
 def text_to_speech(text: str, output_path: str) -> bool:
     api_key  = os.environ.get("ELEVENLABS_API_KEY", "")
@@ -52,12 +45,7 @@ def text_to_speech(text: str, output_path: str) -> bool:
         return False
 
 
-# ─────────────────────────────────────────────
-# 전체 섹션 더빙
-# ─────────────────────────────────────────────
-
 def run():
-    # 환경변수 사전 체크
     if not os.environ.get("ELEVENLABS_API_KEY"):
         raise EnvironmentError("❌ ELEVENLABS_API_KEY 환경변수가 설정되지 않았습니다.")
     if not os.environ.get("ELEVENLABS_VOICE_ID"):
@@ -80,13 +68,11 @@ def run():
         label     = section.get("label", "")
         narration = section.get("narration", "")
 
-        # ── sid가 비어 있으면 건너뜀 ──────────────────────────────────────
         if not sid:
-            print(f"  ⚠️ [{i}/{total}] id가 비어 있어 건너뜀 (label: {label})")
+            print(f"  ⚠️ [{i}/{total}] id 없음 건너뜀")
             continue
 
         out_path = f"output/KO/audio/{sid}.mp3"
-
         print(f"  [{i}/{total}] {label}")
         print(f"    내레이션: {narration[:40]}...")
 
@@ -95,11 +81,7 @@ def run():
         if success:
             print(f"    ✅ 완료 → {out_path}")
             success_count += 1
-            audio_files.append({
-                "id":    sid,
-                "label": label,
-                "path":  out_path
-            })
+            audio_files.append({"id": sid, "label": label, "path": out_path})
         else:
             print(f"    ❌ 실패 → {sid}")
 
@@ -117,9 +99,7 @@ def run():
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
     print(f"\n{'='*40}")
-    print(f"🎉 더빙 완료!")
-    print(f"   성공: {success_count}/{total}개")
-    print(f"   저장 위치: output/KO/audio/")
+    print(f"🎉 더빙 완료! 성공: {success_count}/{total}개")
     print(f"{'='*40}\n")
 
 
