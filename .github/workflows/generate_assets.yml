@@ -46,6 +46,7 @@ jobs:
           name: generated-script-latest
           path: output/KO/scripts/
           if_no_artifact_found: fail
+          workflow_conclusion: success
 
       - name: 🖼️ 자료 화면 제작
         run: |
