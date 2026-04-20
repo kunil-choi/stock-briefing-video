@@ -262,7 +262,7 @@ def _resolve_audio_id(frame_stem: str, sections: list) -> str:
         if not (sid.startswith("stock_") or sid.startswith("hidden_")):
             continue
         name = sid.replace("stock_", "").replace("hidden_", "")
-        if not name or name not in frame_stem:
+        if name and (frame_stem.startswith(name + "_") or f"_{name}_" in frame_stem):
             continue
         for frame_suffix, audio_suffix in suffix_map.items():
             if frame_suffix in frame_stem:
