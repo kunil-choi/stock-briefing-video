@@ -45,7 +45,7 @@ def get_audio_duration(mp3_path: str) -> float:
         return 3.0
 
 
-# ── 텍스트 변환 ────────────────────────────────────────────────────────────
+# ── 텍스트 이스케이프 ──────────────────────────────────────────────────────
 
 def _escape(text: str) -> str:
     """ffmpeg drawtext용 이스케이프"""
@@ -63,10 +63,12 @@ def _escape(text: str) -> str:
     )
 
 
+# ── 자막 변환 (TTS 발음 → 자막 표준어) ────────────────────────────────────
+
 def _narration_to_subtitle(text: str) -> str:
     """
-    narration(TTS용 한글 발음)을 자막용 텍스트로 변환합니다.
-    한글 숫자 표현을 아라비아 숫자로 역변환하고 발음용 표기를 표준어로 되돌립니다.
+    TTS용 한글 발음 텍스트를 자막용 표준 텍스트로 변환합니다.
+    음성은 한글 발음 그대로 / 자막은 아라비아 숫자와 표준어로 표시.
     """
     KOREAN_NUMS = {
         '영': 0, '일': 1, '이': 2, '삼': 3, '사': 4,
@@ -101,7 +103,13 @@ def _narration_to_subtitle(text: str) -> str:
     def replace_percent(m):
         kor = m.group(1)
         try:
-            if '점' in kor:
+            # 쩜 → 소수점 처리 (예: 삼쩜삼퍼센트 → 3.3%)
+            if '쩜' in kor:
+                parts    = kor.split('쩜', 1)
+                int_part = korean_to_arabic(parts[0])
+                dec_part = korean_to_arabic(parts[1])
+                return f"{int_part}.{dec_part}%"
+            elif '점' in kor:
                 parts    = kor.split('점', 1)
                 int_part = korean_to_arabic(parts[0])
                 dec_part = korean_to_arabic(parts[1])
@@ -121,16 +129,32 @@ def _narration_to_subtitle(text: str) -> str:
         except Exception:
             return m.group(0)
 
+    # 플러스/마이너스 → +/-
+    text = text.replace('플러스 ', '+').replace('플러스', '+')
+    text = text.replace('마이너스 ', '-').replace('마이너스', '-')
+
+    # 퍼센트 한글 → 숫자% (쩜/점 소수점 포함)
     text = re.sub(r'([가-힣]+)퍼센트', replace_percent, text)
+
+    # 원 단위 한글 → 숫자원
     text = re.sub(r'([가-힣]+)원', replace_won, text)
+
+    # 발음 표기 → 표준어
     text = text.replace('주까', '주가')
     text = text.replace('신고까', '신고가')
     text = text.replace('고까', '고가')
     text = text.replace('저까', '저가')
+
+    # 영어 약어 복원
     text = text.replace('에이치비엠', 'HBM')
     text = text.replace('이티에프', 'ETF')
     text = text.replace('코스피', 'KOSPI')
     text = text.replace('코스닥', 'KOSDAQ')
+    text = text.replace('에이아이', 'AI')
+    text = text.replace('에스케이', 'SK')
+    text = text.replace('엘지', 'LG')
+    text = text.replace('케이비', 'KB')
+    text = text.replace('에이치디', 'HD')
 
     return text
 
@@ -145,8 +169,8 @@ def build_section_video(
     font_path: str
 ) -> bool:
     """PNG + MP3 → 섹션 mp4 (자막 하단 중앙 고정)"""
-    duration = get_audio_duration(mp3_path)
-    safe_sub = _escape(subtitle)
+    duration  = get_audio_duration(mp3_path)
+    safe_sub  = _escape(subtitle)
     font_part = f"fontfile={font_path}:" if os.path.exists(font_path) else ""
 
     drawtext = (
@@ -234,7 +258,7 @@ def mix_bgm(video_path: str, bgm_path: str, out_path: str) -> bool:
     return True
 
 
-# ── 오디오 ID 결정 (화면별 분리) ──────────────────────────────────────────
+# ── 오디오 ID 결정 ─────────────────────────────────────────────────────────
 
 def _resolve_audio_id(frame_stem: str, sections: list) -> str:
     """
@@ -265,7 +289,7 @@ def _resolve_audio_id(frame_stem: str, sections: list) -> str:
         name = sid.replace("stock_", "").replace("hidden_", "")
         if not name:
             continue
-        # 매칭 실패 시 다음 섹션으로
+        # 매칭 실패 시 다음 섹션으로 건너뜀
         if not (frame_stem.startswith(name + "_") or f"_{name}_" in frame_stem):
             continue
         # 매칭 성공 → suffix 결정
@@ -277,7 +301,7 @@ def _resolve_audio_id(frame_stem: str, sections: list) -> str:
     return sections[0].get("id", "opening") if sections else "opening"
 
 
-# ── 자막 텍스트 결정 (화면별 분리) ────────────────────────────────────────
+# ── 자막 텍스트 결정 ───────────────────────────────────────────────────────
 
 def _resolve_subtitle(frame_stem: str, sections: list) -> str:
     """프레임에 맞는 자막 텍스트를 반환합니다."""
@@ -288,6 +312,7 @@ def _resolve_subtitle(frame_stem: str, sections: list) -> str:
         name = sid.replace("stock_", "").replace("hidden_", "")
         if not name:
             continue
+        # 매칭 실패 시 다음 섹션으로
         if not (frame_stem.startswith(name + "_") or f"_{name}_" in frame_stem):
             continue
         if "_1_summary" in frame_stem:
