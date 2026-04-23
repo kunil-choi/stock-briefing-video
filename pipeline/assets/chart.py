@@ -9,10 +9,14 @@ import matplotlib.font_manager as fm
 from datetime import datetime, timedelta
 from .config import C, STOCK_CODES, normalize_stock_name
 
-# 한글 폰트 설정 (차트 내 한글 깨짐 방지)
+
+# ── 한글 폰트 설정 ─────────────────────────────────────────────────────────
+
 def _set_korean_font():
     candidates = [
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKkr-Regular.otf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJKkr-Regular.otf",
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
         "/Library/Fonts/NanumGothic.ttf",
@@ -24,11 +28,15 @@ def _set_korean_font():
             prop = fm.FontProperties(fname=path)
             matplotlib.rcParams["font.family"] = prop.get_name()
             matplotlib.rcParams["axes.unicode_minus"] = False
+            print(f"  [chart] 폰트 설정: {path}")
             return
     matplotlib.rcParams["axes.unicode_minus"] = False
+    print("  [chart] ⚠️ 한글 폰트 없음, 기본 폰트 사용")
 
 _set_korean_font()
 
+
+# ── OHLCV 데이터 조회 ──────────────────────────────────────────────────────
 
 def fetch_ohlcv(stock_name: str, days: int = 20) -> Optional[pd.DataFrame]:
     normalized = normalize_stock_name(stock_name)
@@ -39,19 +47,33 @@ def fetch_ohlcv(stock_name: str, days: int = 20) -> Optional[pd.DataFrame]:
     try:
         from pykrx import stock as krx
         end   = datetime.today().strftime("%Y%m%d")
-        start = (datetime.today() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        # 주말·공휴일 고려해 충분히 넓은 범위로 조회 (days * 3)
+        start = (datetime.today() - timedelta(days=days * 3)).strftime("%Y%m%d")
         df = krx.get_market_ohlcv_by_date(start, end, code)
         if df is None or df.empty:
             print(f"  [chart] 데이터 없음: {stock_name}")
             return None
-        df = df.tail(days)
+        # pykrx 컬럼명이 한글인 경우 영문으로 변환
+        col_map = {
+            "시가": "Open", "고가": "High", "저가": "Low",
+            "종가": "Close", "거래량": "Volume"
+        }
+        df = df.rename(columns=col_map)
+        # 필요한 컬럼만 선택 (없을 경우 대비)
+        needed = ["Open", "High", "Low", "Close", "Volume"]
+        for col in needed:
+            if col not in df.columns:
+                print(f"  [chart] 컬럼 없음: {col} / 실제 컬럼: {list(df.columns)}")
+                return None
+        df = df[needed].tail(days)
         df.index = pd.to_datetime(df.index)
-        df.columns = ["Open", "High", "Low", "Close", "Volume"]
         return df
     except Exception as e:
         print(f"  [chart] pykrx 오류 ({stock_name}): {e}")
         return None
 
+
+# ── 캔들 차트 생성 ─────────────────────────────────────────────────────────
 
 def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Optional[str]:
     try:
@@ -62,7 +84,6 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
         text_c = "#%02x%02x%02x" % C["chart_text"]
         gold_c = "#%02x%02x%02x" % C["gold"]
 
-        # 1920x1080에 꽉 차도록 figsize를 크게
         fig, (ax_c, ax_v) = plt.subplots(
             2, 1,
             figsize=(19.2, 9.0),
@@ -150,6 +171,8 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
         return None
 
 
+# ── 차트 이미지 빌드 (캐시 포함) ──────────────────────────────────────────
+
 def build_chart_image(stock_name: str, img_dir: str) -> Optional[str]:
     normalized = normalize_stock_name(stock_name)
     save_path  = os.path.join(img_dir, f"chart_{normalized}.png")
@@ -158,6 +181,6 @@ def build_chart_image(stock_name: str, img_dir: str) -> Optional[str]:
         return save_path
     df = fetch_ohlcv(normalized, days=14)
     if df is None or len(df) < 3:
-        print(f"  [chart] 데이터 부족: {normalized}")
+        print(f"  [chart] 데이터 부족 또는 없음: {normalized}")
         return None
     return draw_candle_chart(df, normalized, save_path)
