@@ -11,8 +11,8 @@ from .chart import build_chart_image
 from .image_fetch import fetch_news_image
 
 Y_MAX    = H - 80
-MARGIN_X = 80                    # 좌우 여백
-CX       = W // 2                # 화면 중앙 x
+MARGIN_X = 80
+CX       = W // 2
 
 
 def _save(img, path):
@@ -29,28 +29,25 @@ def _find_section(sections, id_prefix):
 
 
 def _color_change(val):
+    """한국식: 상승=빨강, 하락=파랑"""
     raw = str(val)
     if "▼" in raw or raw.startswith("-"):
-        return C["red"]
-    return C["green"]
+        return C["blue"]       # ← 하락: 파랑
+    return C["red"]            # ← 상승: 빨강
 
 
 def _paste_fill(img: Image.Image, path: str, box: tuple):
-    """
-    차트/이미지를 box 영역에 꽉 채워서 붙입니다 (비율 유지, 중앙 크롭).
-    """
+    """차트/이미지를 box 영역에 꽉 채워서 붙입니다 (비율 유지, 중앙 크롭)."""
     if not path or not os.path.isfile(path):
         return
     try:
         bw = box[2] - box[0]
         bh = box[3] - box[1]
         src = Image.open(path).convert("RGB")
-        # 박스를 꽉 채우는 비율로 확대/축소
         scale = max(bw / src.width, bh / src.height)
         new_w = int(src.width  * scale)
         new_h = int(src.height * scale)
         src = src.resize((new_w, new_h), Image.LANCZOS)
-        # 중앙 크롭
         left = (new_w - bw) // 2
         top  = (new_h - bh) // 2
         src  = src.crop((left, top, left + bw, top + bh))
@@ -68,12 +65,10 @@ def build_opening(data, out_dir):
     keywords = sec.get("keywords", [])
     date_str = data.get("date", "")
 
-    # 그라데이션 배경
     for i in range(H):
         alpha = int(15 * (1 - i / H))
         draw.line([0, i, W, i], fill=(30 + alpha, 32 + alpha, 80 + alpha))
 
-    # 중앙 정렬 콘텐츠
     cy = H // 2 - 160
     draw.text((CX, cy), "AI 주식 브리핑",
               font=fnt(80, bold=True), fill=C["white"], anchor="mm")
@@ -108,7 +103,6 @@ def build_market_summary(data, out_dir):
     positive = sec.get("kospi_change_positive", True)
     points   = sec.get("points", [])
 
-    # KOSPI 값 — 화면 상단 중앙
     cy = 110
     if kospi:
         draw.text((CX, cy), "KOSPI", font=fnt(36, bold=False),
@@ -117,7 +111,8 @@ def build_market_summary(data, out_dir):
         draw.text((CX, cy), kospi, font=fnt(96, bold=True),
                   fill=C["white"], anchor="mm")
         if change:
-            change_color = C["green"] if positive else C["red"]
+            # 한국식: 상승=빨강, 하락=파랑
+            change_color = C["red"] if positive else C["blue"]
             cy += 72
             draw.text((CX, cy), change, font=fnt(52, bold=True),
                       fill=change_color, anchor="mm")
@@ -128,7 +123,6 @@ def build_market_summary(data, out_dir):
     draw_divider(draw, cy)
     cy += 32
 
-    # 포인트 목록 — 중앙 정렬
     for point in points[:5]:
         if cy >= Y_MAX:
             break
@@ -153,7 +147,6 @@ def build_sector(data, out_dir):
 
     sector_list = sec.get("sector_list", sec.get("sectors", sec.get("list", [])))
 
-    # 제목 중앙 정렬
     cy = 100
     draw.text((CX, cy), "핵심 투자 섹터",
               font=fnt(52, bold=True), fill=C["white"], anchor="mm")
@@ -161,8 +154,8 @@ def build_sector(data, out_dir):
     draw.line([CX - 200, cy + 20, CX + 200, cy + 20], fill=C["gold"], width=3)
     cy += 52
 
-    palette = [C["gold"], C["green"], C["blue"],
-               (220, 100, 220), C["red"], (100, 220, 220)]
+    palette = [C["gold"], C["red"], C["blue"],
+               (220, 100, 220), (0, 230, 118), (100, 220, 220)]
     card_w  = (W - MARGIN_X * 2 - 40) // 2
     card_h  = 150
 
@@ -171,11 +164,9 @@ def build_sector(data, out_dir):
         if isinstance(sector, dict):
             name = sector.get("name", "")
             desc = sector.get("desc", sector.get("description", ""))
-            icon = sector.get("icon", "")
         else:
             name = str(sector)
             desc = ""
-            icon = ""
 
         col    = idx % 2
         row    = idx // 2
@@ -192,9 +183,8 @@ def build_sector(data, out_dir):
             [card_x, card_y, card_x + 8, card_y + card_h],
             radius=4, fill=color
         )
-        label = f"{name}" if not icon else f"{name}"  # 이모지 제거
         draw.text((card_x + 28, card_y + 18),
-                  label, font=fnt(36, bold=True), fill=C["white"])
+                  name, font=fnt(36, bold=True), fill=C["white"])
         if desc:
             draw_wrapped_text(draw, desc, card_x + 28, card_y + 70,
                               card_w - 50, size=27,
@@ -215,19 +205,18 @@ def _build_stock_summary(sec, out_path, img_dir):
     catalysts  = sec.get("catalysts", [])
     risks      = sec.get("risks", [])
 
-    img      = new_frame()
-    draw     = ImageDraw.Draw(img)
+    img  = new_frame()
+    draw = ImageDraw.Draw(img)
+
     is_hidden = sec.get("id", "").startswith("hidden_")
     bar_color = C.get("hidden_accent", (80, 30, 120)) if is_hidden else None
     bar_label = "히든종목" if is_hidden else "종목 분석"
     draw_topbar(draw, f"{bar_label}: {stock_name}", color=bar_color)
 
-    # 뉴스 이미지 — 우측 상단
     img_path = fetch_news_image(stock_name, img_dir, [])
     if img_path:
         paste_image(img, img_path, (W - 480, 84, W - 44, 400))
 
-    # 종목명 + 주가 — 좌측 상단, 폰트 크게
     cy = 100
     draw.text((MARGIN_X, cy), stock_name,
               font=fnt(72, bold=True), fill=C["white"])
@@ -248,7 +237,8 @@ def _build_stock_summary(sec, out_path, img_dir):
                     f"₩ {price}", font=fnt(56, bold=True))) + 24
             except Exception:
                 px = MARGIN_X + len(f"₩ {price}") * 30 + 24
-            change_color = C["green"] if positive else C["red"]
+            # 한국식: 상승=빨강, 하락=파랑
+            change_color = C["red"] if positive else C["blue"]
             draw.text((px, cy + 10), change,
                       font=fnt(40, bold=True), fill=change_color)
         cy += 76
@@ -256,12 +246,12 @@ def _build_stock_summary(sec, out_path, img_dir):
     draw_divider(draw, cy)
     cy += 28
 
-    # 촉매 — 좌측, 리스크 — 우측 (2열 배치)
     half_w = (W - MARGIN_X * 2 - 60) // 2
 
     if catalysts:
+        # 투자 포인트 라벨: 한국식 상승색(빨강)
         draw.text((MARGIN_X, cy), "투자 포인트",
-                  font=fnt(34, bold=True), fill=C["green"])
+                  font=fnt(34, bold=True), fill=C["red"])
         ty = cy + 48
         for c in catalysts[:4]:
             if ty >= Y_MAX:
@@ -271,8 +261,9 @@ def _build_stock_summary(sec, out_path, img_dir):
 
     if risks:
         rx = MARGIN_X + half_w + 60
+        # 리스크 라벨: 한국식 하락색(파랑)
         draw.text((rx, cy), "리스크",
-                  font=fnt(34, bold=True), fill=C["red"])
+                  font=fnt(34, bold=True), fill=C["blue"])
         ty = cy + 48
         for r in risks[:3]:
             if ty >= Y_MAX:
@@ -294,7 +285,6 @@ def _build_stock_chart(sec, out_path, img_dir):
 
     chart_path = build_chart_image(stock_name, img_dir)
     if chart_path:
-        # 상단 바(74px) + 여백 10px ~ 하단 바(52px) + 여백 10px 를 꽉 채움
         _paste_fill(img, chart_path, (MARGIN_X, 84, W - MARGIN_X, H - 62))
     else:
         draw.text((CX, H // 2), f"{stock_name} 차트 데이터 없음",
@@ -384,7 +374,6 @@ def build_ai_strategy(data, out_dir):
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, "AI 투자 전략", color=(40, 20, 70))
 
-    # 제목 중앙
     cy = 100
     draw.text((CX, cy), "AI 분석 종합 전략",
               font=fnt(56, bold=True), fill=C["white"], anchor="mm")
