@@ -6,6 +6,10 @@ on:
     types: [completed]
   workflow_dispatch:
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   voice:
     runs-on: ubuntu-latest
