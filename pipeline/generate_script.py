@@ -74,15 +74,36 @@ def generate_script(briefing_text):
 ## 브리핑 데이터 활용 원칙 (핵심)
 - 브리핑 데이터에 등장하는 **모든 종목**을 빠짐없이 설명하세요. stock_ 섹션과 hidden_ 섹션 모두 포함합니다.
 - 각 종목의 내레이션은 브리핑 원본의 내용을 최대한 충실하게, 충분히 길게 작성하세요.
-- 전문가 멘션(mentions)은 브리핑에 등재된 **모든 멘션**을 빠짐없이 읽어야 합니다.
-  - mentions 배열의 각 항목을 순서대로 모두 소개하세요.
-  - 각 멘션은 출처(source), 기자/애널리스트명(reporter/analyst), 핵심 내용(quote/report)을 모두 포함해 충분히 설명하세요.
-  - 예: "한국경제 홍길동 기자에 따르면, [상세 내용]. 또한 머니투데이방송 김철수 기자는 [상세 내용]을 보도했습니다."
-  - 멘션이 여러 페이지에 걸칠 경우, 각 페이지의 멘션을 해당 페이지에서 모두 읽어야 합니다. 중복 없이.
 - 전체 영상이 20분 이내가 되도록 충분히 상세하게 작성하세요.
 
+## 기자·전문가 이름 표기 규칙 (반드시 준수)
+- 브리핑 원문에 기자명 또는 애널리스트명이 명확하게 기재된 경우에만 이름을 사용하세요.
+- 이름이 확실하지 않거나 원문에 없는 경우, 이름을 절대 임의로 만들지 말고 매체명(source)만 사용하세요.
+- 올바른 예: "한국경제에 따르면, [내용]을 보도했습니다."
+- 금지 예: "한국경제 홍길동 기자에 따르면..." (원문에 이름이 없는 경우)
+
+## 히든픽 순번 규칙 (반드시 준수)
+- hidden_ 섹션이 여러 개인 경우, 각 섹션의 narration_summary 도입부에 반드시 순번을 명시하세요.
+- 첫 번째 hidden_ 섹션 → "오늘의 히든픽 첫 번째는..."
+- 두 번째 hidden_ 섹션 → "오늘의 히든픽 두 번째는..."
+- 세 번째 hidden_ 섹션 → "오늘의 히든픽 세 번째는..."
+- hidden_ 섹션이 1개뿐인 경우 → "오늘의 히든픽은..."
+
+## 전문가 멘션 페이지별 분리 규칙 (핵심 — 반드시 준수)
+- mentions 배열의 멘션 수에 따라 화면 페이지가 자동으로 나뉩니다.
+  - 멘션 1~3개 → 1페이지
+  - 멘션 4~6개 → 2페이지 (1페이지: 0~2번, 2페이지: 3~5번)
+  - 멘션 7~9개 → 3페이지 (1페이지: 0~2번, 2페이지: 3~5번, 3페이지: 6~8번)
+- narration은 반드시 해당 페이지에 표시되는 멘션만 읽어야 합니다. 페이지 간 내용 중복 절대 금지.
+- 멘션 1~3개(1페이지): narration_mention 필드 1개만 작성.
+- 멘션 4개 이상(2페이지 이상): narration_mention_0, narration_mention_1 등 페이지별로 분리 작성.
+- 올바른 예시 (멘션 5개, 2페이지):
+  narration_mention_0: "먼저 한국경제에서는 [mentions[0] 내용]을 보도했습니다. 이어서 머니투데이방송에서는 [mentions[1] 내용]. 또한 [mentions[2] 내용]입니다."
+  narration_mention_1: "이어서 키움증권에서는 [mentions[3] 내용]. 마지막으로 미래에셋에서는 [mentions[4] 내용]."
+- 금지 예시: narration_mention_0과 narration_mention_1에 동일한 내용이 반복되는 것.
+
 ## 화면별 narration 분리 규칙 (핵심 — 반드시 준수)
-stock_/hidden_ 섹션은 화면이 3개로 분리됩니다. 각 화면에 맞는 narration을 반드시 별도 필드로 작성하세요.
+stock_/hidden_ 섹션은 화면이 3개 이상으로 분리됩니다.
 
 narration_summary (종목 소개 화면):
 - 코너 도입 멘트 + 종목 상세 소개(사업 내용, 시장 위치) + 현재 주까와 등락률 + 투자 포인트 전체 설명
@@ -92,12 +113,11 @@ narration_summary (종목 소개 화면):
 narration_chart (최근 2주 차트 화면):
 - 최근 주까 흐름 상세 설명 + 주요 변곡점 설명 + 상승/하락 원인 분석 + 리스크 요인 전체 설명
 - 분량: 최소 5문장 이상
-- 예: "최근 이주간 주까 흐름을 보겠습니다. 초반 육만이천원에서 시작해..."
 
-narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
-- 해당 페이지에 표시되는 mentions를 모두 읽어야 합니다.
-- 각 멘션의 출처, 기자/애널리스트, 핵심 내용을 충분히 상세하게 설명하세요.
-- 멘션이 여러 페이지이면 narration_mention_0, narration_mention_1 등으로 페이지별 구분하세요.
+narration_mention / narration_mention_0, narration_mention_1... (전문가 멘션 화면):
+- 멘션 1~3개: narration_mention 필드 1개만 작성
+- 멘션 4개 이상: narration_mention_0, narration_mention_1 등 페이지별 분리 작성
+- 해당 페이지의 멘션만 읽을 것, 절대 중복 없이
 - 분량: 페이지당 최소 3문장 이상
 
 ## 일반 섹션 narration 규칙
@@ -122,7 +142,7 @@ narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
       "narration": "오늘의 주식시장 요약입니다. [상세 시장 분석 — 최소 4문장]",
       "kospi_value": "2,650",
       "kospi_change": "+1.2%",
-      "kospi_change\_positive": true,
+      "kospi_change_positive": true,
       "points": ["포인트1", "포인트2", "포인트3", "포인트4"]
     }},
     {{
@@ -139,9 +159,9 @@ narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
       "narration": "[narration_summary 내용]",
       "narration_summary": "코너 도입 + 종목 상세 소개 + 현재 주까와 등락률 + 투자포인트 전체 (최소 5문장)",
       "narration_chart": "최근 이주간 주까 흐름 상세 + 변곡점 + 촉매 + 리스크 전체 (최소 5문장)",
-      "narration_mention": "해당 페이지 mentions 전체를 상세히 읽기 (멘션이 1페이지인 경우)",
-      "narration_mention_0": "1페이지 mentions 전체 상세 읽기 (멘션이 2페이지 이상인 경우)",
-      "narration_mention_1": "2페이지 mentions 전체 상세 읽기",
+      "narration_mention": "멘션 3개 이하일 때 — 전체 멘션 상세 읽기",
+      "narration_mention_0": "멘션 4개 이상일 때 — 1페이지(mentions[0]~[2])만 상세 읽기",
+      "narration_mention_1": "멘션 4개 이상일 때 — 2페이지(mentions[3]~[5])만 상세 읽기",
       "summary": "기업 한 줄 소개",
       "price": "000,000",
       "change": "+0.00%",
@@ -149,18 +169,18 @@ narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
       "catalysts": ["촉매1", "촉매2", "촉매3", "촉매4"],
       "risks": ["리스크1", "리스크2", "리스크3"],
       "mentions": [
-        {{"source": "채널명", "reporter": "기자/애널리스트명", "quote": "언급 내용 상세"}}
+        {{"source": "매체명", "reporter": "확인된 이름만 (불확실하면 빈 문자열 \"\")", "quote": "언급 내용 상세"}}
       ]
     }},
     {{
       "id": "hidden_종목명",
       "label": "히든종목 - 종목명",
       "narration": "[narration_summary 내용]",
-      "narration_summary": "히든픽 코너 도입 + 종목 상세 소개 + 현재 주까와 등락률 + 투자포인트 전체 (최소 5문장)",
+      "narration_summary": "오늘의 히든픽 N번째는 [종목명]입니다. + 종목 상세 소개 + 현재 주까와 등락률 + 투자포인트 전체 (최소 5문장)",
       "narration_chart": "최근 이주간 주까 흐름 상세 + 촉매 + 리스크 전체 (최소 5문장)",
-      "narration_mention": "해당 페이지 mentions 전체를 상세히 읽기 (멘션이 1페이지인 경우)",
-      "narration_mention_0": "1페이지 mentions 전체 상세 읽기 (멘션이 2페이지 이상인 경우)",
-      "narration_mention_1": "2페이지 mentions 전체 상세 읽기",
+      "narration_mention": "멘션 3개 이하일 때 — 전체 멘션 상세 읽기",
+      "narration_mention_0": "멘션 4개 이상일 때 — 1페이지(mentions[0]~[2])만 상세 읽기",
+      "narration_mention_1": "멘션 4개 이상일 때 — 2페이지(mentions[3]~[5])만 상세 읽기",
       "summary": "기업 한 줄 소개",
       "price": "000,000",
       "change": "+0.00%",
@@ -168,7 +188,7 @@ narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
       "catalysts": ["촉매1", "촉매2"],
       "risks": ["리스크1", "리스크2"],
       "mentions": [
-        {{"source": "채널명", "analyst": "애널리스트명", "report": "보고서 핵심 상세"}}
+        {{"source": "매체명", "analyst": "확인된 이름만 (불확실하면 빈 문자열 \"\")", "report": "보고서 핵심 상세"}}
       ]
     }},
     {{
@@ -189,9 +209,9 @@ narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
 ## 주의사항
 - opening narration은 반드시 "__OPENING__" 그대로 출력
 - closing narration은 반드시 "__CLOSING__" 그대로 출력
-- stock_/hidden_ 섹션은 narration_summary, narration_chart, narration_mention(또는 narration_mention_0, narration_mention_1...) 필드를 반드시 모두 작성
+- stock_/hidden_ 섹션은 narration_summary, narration_chart, narration_mention(또는 _0/_1) 반드시 작성
 - narration 필드는 narration_summary와 동일하게 작성
-- 브리핑에 등장하는 모든 종목(stock_ 및 hidden_)을 반드시 포함할 것
+- 브리핑에 등장하는 모든 종목(stock_ 및 hidden_) 반드시 포함
 - 반드시 순수 JSON만 출력, 마크다운 블록 없이
 - max_tokens 한도 내에서 최대한 상세하게 작성
 """
@@ -203,7 +223,7 @@ narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
             {"role": "user",   "content": f"다음 브리핑 데이터를 분석하여 JSON 원고를 생성하세요:\n\n{briefing_text}"}
         ],
         temperature=0.7,
-        max_tokens=16000   # 8000 → 16000 으로 증가 (상세 원고 대응)
+        max_tokens=16000
     )
 
     raw = response.choices[0].message.content.strip()
