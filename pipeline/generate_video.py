@@ -10,7 +10,7 @@ import urllib.request
 BGM_URL            = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
 BGM_VOLUME         = 0.20
 FONT_PATH          = "assets/fonts/NotoSansKR-Bold.ttf"
-SUBTITLE_SIZE      = 28                 # ✅ 수정: 34 → 28 (본문보다 작게)
+SUBTITLE_SIZE      = 28
 SUBTITLE_COLOR     = "white"
 SUBTITLE_BOX_COLOR = "0x000000@0.55"
 SUBTITLE_Y_BASE    = "h-160"
@@ -42,149 +42,22 @@ def get_audio_duration(mp3_path: str) -> float:
         return 3.0
 
 
-# ── 내레이션 → 자막 텍스트 변환 ───────────────────────────────────────────
-def _narration_to_subtitle(text: str) -> str:
-    """TTS용 한글 발음 표기를 자막용 표준어·아라비아 숫자로 변환"""
+# ── 자막 텍스트 정리 ──────────────────────────────────────────────────────
+def _clean_subtitle(text: str) -> str:
+    """
+    subtitle 필드는 GPT가 이미 아라비아 숫자·영어 약어로 작성했으므로
+    변환 없이 공백·줄바꿈만 정리합니다.
+    혹시 구버전 script.json (subtitle 필드 없음) 과의 호환을 위해
+    최소한의 한글 숫자 변환 fallback만 유지합니다.
+    """
+    if not text:
+        return ""
 
-    # ── 1) 발음 교정 ─────────────────────────────────────────────────────
-    REPLACEMENTS = [
-        ('주까',       '주가'),
-        ('신고까',     '신고가'),
-        ('고까',       '고가'),
-        ('저까',       '저가'),
-        ('에이치비엠', 'HBM'),
-        ('이티에프',   'ETF'),
-        ('코스피',     'KOSPI'),
-        ('코스닥',     'KOSDAQ'),
-        ('에스케이',   'SK'),
-        ('엘지',       'LG'),
-        ('케이비',     'KB'),
-        ('엔에이치',   'NH'),
-    ]
-    for src, dst in REPLACEMENTS:
-        text = text.replace(src, dst)
+    # 줄바꿈 → 공백
+    text = text.replace('\n', ' ').replace('\r', ' ')
 
-    # ── 2) 한글 숫자 → 아라비아 숫자 변환 ───────────────────────────────
-    HNUMS = {
-        '영': 0, '일': 1, '이': 2, '삼': 3, '사': 4,
-        '오': 5, '육': 6, '칠': 7, '팔': 8, '구': 9,
-    }
-    SMALL_UNITS = {'십': 10, '백': 100, '천': 1_000}
-    KOR_PAT = r'[영일이삼사오육칠팔구십백천만억]+'
-
-    def _parse_small(s: str):
-        """
-        천 이하 구간 파싱.
-        '칠천오백' → 7500, '이십삼' → 23, '오' → 5
-        실패 시 None 반환.
-        """
-        if not s:
-            return 0
-        result  = 0
-        current = 0
-        for ch in s:
-            if ch in HNUMS:
-                current = HNUMS[ch]
-            elif ch in SMALL_UNITS:
-                result += (current if current != 0 else 1) * SMALL_UNITS[ch]
-                current = 0
-            else:
-                return None
-        result += current
-        return result
-
-    def kor_to_int(s: str):
-        """
-        한글 숫자 문자열을 정수로 변환.
-        억/만 단위 분리 후 _parse_small 으로 나머지 처리.
-        """
-        s = s.strip()
-        if not s:
-            return None
-        total = 0
-
-        if '억' in s:
-            idx = s.index('억')
-            v   = _parse_small(s[:idx])
-            if v is None:
-                return None
-            total += (v if v != 0 else 1) * 100_000_000
-            s = s[idx + 1:]
-
-        if '만' in s:
-            idx = s.index('만')
-            v   = _parse_small(s[:idx])
-            if v is None:
-                return None
-            total += (v if v != 0 else 1) * 10_000
-            s = s[idx + 1:]
-
-        v = _parse_small(s)
-        if v is None:
-            return None
-        total += v
-        return total if total > 0 else None
-
-    # 2-a) 소수점: '삼점삼' / '삼쩜삼' → '3.3'
-    def repl_decimal(m):
-        i_n = kor_to_int(m.group(1))
-        if i_n is None:
-            return m.group(0)
-        dec = "".join(str(HNUMS[c]) for c in m.group(2) if c in HNUMS)
-        if not dec:
-            return m.group(0)
-        return f"{i_n}.{dec}"
-
-    text = re.sub(rf'({KOR_PAT})[점쩜]({KOR_PAT})', repl_decimal, text)
-
-    # 2-b) 퍼센트: '삼퍼센트' / '플러스일점이퍼센트' → '3%' / '+1.2%'
-    def repl_pct(m):
-        sign = ("+" if "플러스" in (m.group(1) or "")
-                else "-" if "마이너스" in (m.group(1) or "")
-                else "")
-        num = m.group(2)
-        if re.match(r'^[\d.]+$', num):
-            return f"{sign}{num}%"
-        n = kor_to_int(num)
-        return f"{sign}{n}%" if n is not None else m.group(0)
-
-    text = re.sub(
-        r'(플러스|마이너스)?([\d.영일이삼사오육칠팔구십백천만억]+)퍼센트',
-        repl_pct, text
-    )
-
-    # 2-c) 원화: '칠천오백원' → '7,500원'
-    def repl_won(m):
-        kor = m.group(1)
-        if re.match(r'^[\d,]+$', kor):
-            return m.group(0)
-        n = kor_to_int(kor)
-        return f"{n:,}원" if n is not None else m.group(0)
-
-    text = re.sub(rf'({KOR_PAT})원', repl_won, text)
-
-    # 2-d) 단위 앞 한글 숫자: '이십사시간' → '24시간'
-    UNIT_SFX = r'(?=개|명|회|번|배|년|월|일|시|분|초|주|장|종목|시간|일간|주간|번째)'
-
-    def repl_unit(m):
-        n = kor_to_int(m.group(1))
-        return f"{n:,}" if n is not None else m.group(0)
-
-    text = re.sub(rf'({KOR_PAT}){UNIT_SFX}', repl_unit, text)
-
-    # 2-e) 남은 독립 한글 숫자 → 아라비아 숫자  ✅ 신규 추가
-    # (위 단계에서 처리되지 않은 '칠천오백', '삼만이천' 등 잔여 패턴 변환)
-    def repl_remaining(m):
-        n = kor_to_int(m.group(0))
-        if n is not None:
-            return f"{n:,}"
-        return m.group(0)
-
-    text = re.sub(KOR_PAT, repl_remaining, text)
-
-    # ── 3) 부호 정리 ─────────────────────────────────────────────────────
-    text = re.sub(r'플러스\s*', '+', text)
-    text = re.sub(r'마이너스\s*', '-', text)
+    # 연속 공백 정리
+    text = re.sub(r' {2,}', ' ', text)
 
     return text.strip()
 
@@ -193,8 +66,8 @@ def _narration_to_subtitle(text: str) -> str:
 def _split_lines(text: str, max_chars: int = SUBTITLE_MAX_CHARS) -> list:
     """
     문장부호 위치를 우선 분할 기준으로 삼고,
-    그래도 max_chars 초과하면 공백·글자 단위로 추가 분할.
-    반환값은 순수 문자열 리스트 (\n 없음). ✅ 명시적 strip으로 \n 제거
+    max_chars 초과하면 공백·글자 단위로 추가 분할.
+    반환값은 순수 문자열 리스트 (줄바꿈 문자 없음).
     """
     sentences = re.split(r'(?<=[.!?。…])\s*', text.strip())
     sentences = [s.strip().replace('\n', ' ') for s in sentences if s.strip()]
@@ -207,7 +80,6 @@ def _split_lines(text: str, max_chars: int = SUBTITLE_MAX_CHARS) -> list:
             words = sent.split()
             cur = ""
             for w in words:
-                # ✅ 단어 자체의 \n 제거
                 w = w.replace('\n', '').strip()
                 if not w:
                     continue
@@ -242,7 +114,6 @@ def _make_srt(subtitle_text: str, duration: float, srt_path: str):
     """
     자막을 줄 단위로 분할 → 오디오 시간 균등 배분 → SRT 파일 저장.
     각 줄 최소 1.2초 보장, 마지막 줄은 duration 끝까지.
-    ✅ 각 줄에서 \n 완전 제거 후 저장
     """
     lines = _split_lines(subtitle_text)
     n   = len(lines)
@@ -250,7 +121,6 @@ def _make_srt(subtitle_text: str, duration: float, srt_path: str):
 
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, line in enumerate(lines):
-            # ✅ SRT 저장 직전 \n 완전 제거
             clean_line = line.replace('\n', ' ').replace('\r', '').strip()
             start = i * per
             end   = duration if i == n - 1 else min((i + 1) * per, duration)
@@ -412,9 +282,15 @@ def _resolve_audio_id(frame_stem: str, sections: list) -> str:
 # ── 자막 텍스트 결정 ──────────────────────────────────────────────────────
 def _resolve_subtitle(frame_stem: str, sections: list) -> str:
     """
-    프레임 이름 기반으로 해당 자막 텍스트를 결정.
-    ✅ _3_mention_00 / _01 등 페이지 인덱스 파싱해 narration_mention_0/1 분기
+    프레임 이름 기반으로 subtitle_* 필드를 우선 참조.
+    subtitle_* 필드가 없으면 narration_* 필드로 fallback.
     """
+
+    def _pick(sec: dict, narr_key: str, sub_key: str) -> str:
+        """subtitle 필드 우선, 없으면 narration 필드 사용"""
+        return sec.get(sub_key) or sec.get(narr_key) or sec.get("subtitle") or sec.get("narration", "")
+
+    # ── stock_ / hidden_ 섹션 매칭 ───────────────────────────────────────
     for sec in sections:
         sid  = sec.get("id", "")
         if not (sid.startswith("stock_") or sid.startswith("hidden_")):
@@ -428,26 +304,28 @@ def _resolve_subtitle(frame_stem: str, sections: list) -> str:
             continue
 
         if "_1_summary" in frame_stem:
-            return sec.get("narration_summary") or sec.get("narration", "")
+            return _pick(sec, "narration_summary", "subtitle_summary")
 
         elif "_2_chart" in frame_stem:
-            return sec.get("narration_chart") or sec.get("narration", "")
+            return _pick(sec, "narration_chart", "subtitle_chart")
 
         elif "_3_mention" in frame_stem:
-            # ✅ 페이지 인덱스 파싱: _3_mention_00 → 0, _3_mention_01 → 1
+            # 페이지 인덱스 파싱: _3_mention_00 → 0, _3_mention_01 → 1
             page_match = re.search(r'_3_mention_(\d+)', frame_stem)
             if page_match:
                 page_idx = int(page_match.group(1))
-                key = f"narration_mention_{page_idx}"
-                # 해당 페이지 키가 있으면 우선 사용
-                if sec.get(key):
-                    return sec[key]
-            # 페이지 인덱스 없거나 키 없으면 narration_mention 또는 narration 사용
-            return sec.get("narration_mention") or sec.get("narration", "")
+                sub_key  = f"subtitle_mention_{page_idx}"
+                narr_key = f"narration_mention_{page_idx}"
+                val = sec.get(sub_key) or sec.get(narr_key)
+                if val:
+                    return val
+            # 인덱스 없거나 키 없으면 단수 필드 사용
+            return _pick(sec, "narration_mention", "subtitle_mention")
 
-        return sec.get("narration", "")
+        # 그 외 (프레임이 종목명과 직접 매칭)
+        return _pick(sec, "narration_summary", "subtitle_summary")
 
-    # 고정 섹션 매핑
+    # ── 고정 섹션 매칭 ────────────────────────────────────────────────────
     fixed = {
         "opening":     "opening",
         "market":      "market_summary",
@@ -459,7 +337,7 @@ def _resolve_subtitle(frame_stem: str, sections: list) -> str:
         if key in frame_stem:
             for sec in sections:
                 if sec.get("id") == sid:
-                    return sec.get("narration", "")
+                    return sec.get("subtitle") or sec.get("narration", "")
             break
 
     print(f"  ⚠️ 자막 매칭 실패: {frame_stem}")
@@ -514,10 +392,12 @@ def run(lang: str = "KO"):
         frame_name = os.path.basename(frame_path)
         frame_stem = os.path.splitext(frame_name)[0]
 
-        audio_id  = _resolve_audio_id(frame_stem, sections)
-        mp3_path  = os.path.join(audio_dir, f"{audio_id}.mp3")
-        narration = _resolve_subtitle(frame_stem, sections)
-        subtitle  = _narration_to_subtitle(narration)
+        audio_id = _resolve_audio_id(frame_stem, sections)
+        mp3_path = os.path.join(audio_dir, f"{audio_id}.mp3")
+
+        # ✅ subtitle 필드 직접 사용 (변환 없음)
+        raw_subtitle = _resolve_subtitle(frame_stem, sections)
+        subtitle     = _clean_subtitle(raw_subtitle)
 
         if not subtitle.strip():
             print(f"  ⚠️ 빈 자막: {frame_stem}")
