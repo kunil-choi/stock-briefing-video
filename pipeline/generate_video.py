@@ -3,7 +3,6 @@ import os
 import sys
 import json
 import re
-import math
 import subprocess
 import tempfile
 import urllib.request
@@ -11,11 +10,11 @@ import urllib.request
 BGM_URL            = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
 BGM_VOLUME         = 0.20
 FONT_PATH          = "assets/fonts/NotoSansKR-Bold.ttf"
-SUBTITLE_SIZE      = 34
+SUBTITLE_SIZE      = 28                 # ✅ 수정: 34 → 28 (본문보다 작게)
 SUBTITLE_COLOR     = "white"
 SUBTITLE_BOX_COLOR = "0x000000@0.55"
 SUBTITLE_Y_BASE    = "h-160"
-SUBTITLE_MAX_CHARS = 20   # 자막 한 줄 최대 글자 수
+SUBTITLE_MAX_CHARS = 20
 
 
 # ── BGM ──────────────────────────────────────────────────────────────────
@@ -47,7 +46,7 @@ def get_audio_duration(mp3_path: str) -> float:
 def _narration_to_subtitle(text: str) -> str:
     """TTS용 한글 발음 표기를 자막용 표준어·아라비아 숫자로 변환"""
 
-    # ── 1) 발음 교정 ──────────────────────────────────────────────────────
+    # ── 1) 발음 교정 ─────────────────────────────────────────────────────
     REPLACEMENTS = [
         ('주까',       '주가'),
         ('신고까',     '신고가'),
@@ -65,8 +64,7 @@ def _narration_to_subtitle(text: str) -> str:
     for src, dst in REPLACEMENTS:
         text = text.replace(src, dst)
 
-    # ── 2) 한글 숫자 → 아라비아 숫자 변환 ────────────────────────────────
-    # 지원 범위: 영~구십구억구천구백구십구 (99,999,999,999)
+    # ── 2) 한글 숫자 → 아라비아 숫자 변환 ───────────────────────────────
     HNUMS = {
         '영': 0, '일': 1, '이': 2, '삼': 3, '사': 4,
         '오': 5, '육': 6, '칠': 7, '팔': 8, '구': 9,
@@ -76,23 +74,22 @@ def _narration_to_subtitle(text: str) -> str:
 
     def _parse_small(s: str):
         """
-        천 미만 구간 파싱: '칠천오백' 같은 혼합 표현 처리.
-        ex) '칠천오백' → 7500,  '이십삼' → 23,  '오' → 5
+        천 이하 구간 파싱.
+        '칠천오백' → 7500, '이십삼' → 23, '오' → 5
         실패 시 None 반환.
         """
         if not s:
             return 0
-        result = 0
-        current = 0   # 이전에 읽은 1~9 숫자
+        result  = 0
+        current = 0
         for ch in s:
             if ch in HNUMS:
                 current = HNUMS[ch]
             elif ch in SMALL_UNITS:
-                # 단위 앞 숫자가 없으면 1로 처리 (e.g. '십' → 10)
                 result += (current if current != 0 else 1) * SMALL_UNITS[ch]
                 current = 0
             else:
-                return None   # 알 수 없는 문자
+                return None
         result += current
         return result
 
@@ -106,25 +103,22 @@ def _narration_to_subtitle(text: str) -> str:
             return None
         total = 0
 
-        # 억 단위 분리
         if '억' in s:
             idx = s.index('억')
-            v = _parse_small(s[:idx])
+            v   = _parse_small(s[:idx])
             if v is None:
                 return None
             total += (v if v != 0 else 1) * 100_000_000
             s = s[idx + 1:]
 
-        # 만 단위 분리
         if '만' in s:
             idx = s.index('만')
-            v = _parse_small(s[:idx])
+            v   = _parse_small(s[:idx])
             if v is None:
                 return None
             total += (v if v != 0 else 1) * 10_000
             s = s[idx + 1:]
 
-        # 나머지 (천 이하)
         v = _parse_small(s)
         if v is None:
             return None
@@ -149,7 +143,6 @@ def _narration_to_subtitle(text: str) -> str:
                 else "-" if "마이너스" in (m.group(1) or "")
                 else "")
         num = m.group(2)
-        # 이미 아라비아 숫자(소수점 변환 후)
         if re.match(r'^[\d.]+$', num):
             return f"{sign}{num}%"
         n = kor_to_int(num)
@@ -172,13 +165,24 @@ def _narration_to_subtitle(text: str) -> str:
 
     # 2-d) 단위 앞 한글 숫자: '이십사시간' → '24시간'
     UNIT_SFX = r'(?=개|명|회|번|배|년|월|일|시|분|초|주|장|종목|시간|일간|주간|번째)'
+
     def repl_unit(m):
         n = kor_to_int(m.group(1))
         return f"{n:,}" if n is not None else m.group(0)
 
     text = re.sub(rf'({KOR_PAT}){UNIT_SFX}', repl_unit, text)
 
-    # ── 3) 부호 정리 ──────────────────────────────────────────────────────
+    # 2-e) 남은 독립 한글 숫자 → 아라비아 숫자  ✅ 신규 추가
+    # (위 단계에서 처리되지 않은 '칠천오백', '삼만이천' 등 잔여 패턴 변환)
+    def repl_remaining(m):
+        n = kor_to_int(m.group(0))
+        if n is not None:
+            return f"{n:,}"
+        return m.group(0)
+
+    text = re.sub(KOR_PAT, repl_remaining, text)
+
+    # ── 3) 부호 정리 ─────────────────────────────────────────────────────
     text = re.sub(r'플러스\s*', '+', text)
     text = re.sub(r'마이너스\s*', '-', text)
 
@@ -189,41 +193,42 @@ def _narration_to_subtitle(text: str) -> str:
 def _split_lines(text: str, max_chars: int = SUBTITLE_MAX_CHARS) -> list:
     """
     문장부호 위치를 우선 분할 기준으로 삼고,
-    그래도 max_chars를 초과하면 공백·글자 단위로 추가 분할.
-    반환값은 순수 문자열 리스트 (줄바꿈 문자 없음).
+    그래도 max_chars 초과하면 공백·글자 단위로 추가 분할.
+    반환값은 순수 문자열 리스트 (\n 없음). ✅ 명시적 strip으로 \n 제거
     """
-    # 문장 단위 1차 분할
     sentences = re.split(r'(?<=[.!?。…])\s*', text.strip())
-    sentences = [s.strip() for s in sentences if s.strip()]
+    sentences = [s.strip().replace('\n', ' ') for s in sentences if s.strip()]
 
     lines = []
     for sent in sentences:
         if len(sent) <= max_chars:
-            lines.append(sent)
+            lines.append(sent.strip())
         else:
             words = sent.split()
             cur = ""
             for w in words:
+                # ✅ 단어 자체의 \n 제거
+                w = w.replace('\n', '').strip()
+                if not w:
+                    continue
                 candidate = (cur + " " + w).strip() if cur else w
                 if len(candidate) <= max_chars:
                     cur = candidate
                 else:
                     if cur:
-                        lines.append(cur)
-                    # 단어 자체가 max_chars 초과 → 글자 단위 강제 분할
+                        lines.append(cur.strip())
                     while len(w) > max_chars:
-                        lines.append(w[:max_chars])
+                        lines.append(w[:max_chars].strip())
                         w = w[max_chars:]
                     cur = w
             if cur:
-                lines.append(cur)
+                lines.append(cur.strip())
 
-    return lines if lines else [text[:max_chars]]
+    return lines if lines else [text[:max_chars].strip()]
 
 
 # ── SRT 파일 생성 ─────────────────────────────────────────────────────────
 def _sec_to_srt_time(s: float) -> str:
-    """초(float) → SRT 타임코드  00:00:00,000"""
     h  = int(s // 3600)
     m  = int((s % 3600) // 60)
     sc = int(s % 60)
@@ -235,25 +240,28 @@ def _sec_to_srt_time(s: float) -> str:
 
 def _make_srt(subtitle_text: str, duration: float, srt_path: str):
     """
-    자막을 줄 단위로 분할 → 오디오 시간을 균등 배분 → SRT 파일 저장.
-    각 줄은 최소 1.2초 보장, 마지막 줄은 duration 끝까지 표시.
+    자막을 줄 단위로 분할 → 오디오 시간 균등 배분 → SRT 파일 저장.
+    각 줄 최소 1.2초 보장, 마지막 줄은 duration 끝까지.
+    ✅ 각 줄에서 \n 완전 제거 후 저장
     """
     lines = _split_lines(subtitle_text)
-    n = len(lines)
-    per = max(duration / n, 1.2)   # 줄당 최소 1.2초
+    n   = len(lines)
+    per = max(duration / n, 1.2)
 
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, line in enumerate(lines):
+            # ✅ SRT 저장 직전 \n 완전 제거
+            clean_line = line.replace('\n', ' ').replace('\r', '').strip()
             start = i * per
             end   = duration if i == n - 1 else min((i + 1) * per, duration)
             if end <= start:
                 end = start + 1.0
             f.write(f"{i + 1}\n")
             f.write(f"{_sec_to_srt_time(start)} --> {_sec_to_srt_time(end)}\n")
-            f.write(f"{line}\n\n")
+            f.write(f"{clean_line}\n\n")
 
 
-# ── 섹션 영상 생성 (SRT 자막) ─────────────────────────────────────────────
+# ── 섹션 영상 생성 ────────────────────────────────────────────────────────
 def build_section_video(
     png_path:  str,
     mp3_path:  str,
@@ -261,17 +269,14 @@ def build_section_video(
     out_path:  str,
     font_path: str
 ) -> bool:
-    """PNG + MP3 → 섹션 MP4  (SRT 자막으로 순차 표시, 양쪽 짤림 없음)"""
     duration = get_audio_duration(mp3_path)
 
-    # 임시 SRT 파일
     srt_fd, srt_path = tempfile.mkstemp(suffix=".srt")
     os.close(srt_fd)
 
     try:
         _make_srt(subtitle, duration, srt_path)
 
-        # subtitles 필터: fontsdir 로 커스텀 폰트 경로 지정
         abs_srt = srt_path.replace("\\", "/").replace(":", "\\:")
         font_dir_opt = ""
         if os.path.exists(font_path):
@@ -337,10 +342,10 @@ def concat_videos(video_list: list, out_path: str) -> bool:
     result = subprocess.run(cmd, capture_output=True, text=True)
     os.remove(list_file)
     if result.returncode != 0:
-        print(f"  ❌ 영상 합치기 실패")
+        print("  ❌ 영상 합치기 실패")
         print(result.stderr[-400:])
         return False
-    print(f"  ✅ 합치기 완료")
+    print("  ✅ 합치기 완료")
     return True
 
 
@@ -360,10 +365,10 @@ def mix_bgm(video_path: str, bgm_path: str, out_path: str) -> bool:
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"  ❌ BGM 믹싱 실패")
+        print("  ❌ BGM 믹싱 실패")
         print(result.stderr[-400:])
         return False
-    print(f"  ✅ BGM 믹싱 완료")
+    print("  ✅ BGM 믹싱 완료")
     return True
 
 
@@ -406,6 +411,10 @@ def _resolve_audio_id(frame_stem: str, sections: list) -> str:
 
 # ── 자막 텍스트 결정 ──────────────────────────────────────────────────────
 def _resolve_subtitle(frame_stem: str, sections: list) -> str:
+    """
+    프레임 이름 기반으로 해당 자막 텍스트를 결정.
+    ✅ _3_mention_00 / _01 등 페이지 인덱스 파싱해 narration_mention_0/1 분기
+    """
     for sec in sections:
         sid  = sec.get("id", "")
         if not (sid.startswith("stock_") or sid.startswith("hidden_")):
@@ -417,14 +426,28 @@ def _resolve_subtitle(frame_stem: str, sections: list) -> str:
                 f"_{name}_" in frame_stem or
                 frame_stem == name):
             continue
+
         if "_1_summary" in frame_stem:
             return sec.get("narration_summary") or sec.get("narration", "")
+
         elif "_2_chart" in frame_stem:
-            return sec.get("narration_chart")   or sec.get("narration", "")
+            return sec.get("narration_chart") or sec.get("narration", "")
+
         elif "_3_mention" in frame_stem:
+            # ✅ 페이지 인덱스 파싱: _3_mention_00 → 0, _3_mention_01 → 1
+            page_match = re.search(r'_3_mention_(\d+)', frame_stem)
+            if page_match:
+                page_idx = int(page_match.group(1))
+                key = f"narration_mention_{page_idx}"
+                # 해당 페이지 키가 있으면 우선 사용
+                if sec.get(key):
+                    return sec[key]
+            # 페이지 인덱스 없거나 키 없으면 narration_mention 또는 narration 사용
             return sec.get("narration_mention") or sec.get("narration", "")
+
         return sec.get("narration", "")
 
+    # 고정 섹션 매핑
     fixed = {
         "opening":     "opening",
         "market":      "market_summary",
@@ -457,7 +480,7 @@ def _make_silent_audio(tmp_dir: str, name: str) -> str:
 
 # ── 메인 실행 ─────────────────────────────────────────────────────────────
 def run(lang: str = "KO"):
-    lang = lang.upper()
+    lang           = lang.upper()
     root           = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
     script_path    = os.path.join(root, "output", lang, "scripts", "script.json")
     audio_dir      = os.path.join(root, "output", lang, "audio")
