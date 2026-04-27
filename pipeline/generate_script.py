@@ -12,6 +12,7 @@ if _HERE not in sys.path:
 from assets.config import STOCK_CODES, normalize_stock_name
 
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
 TODAY       = datetime.now().strftime("%Y년 %m월 %d일")
 TODAY_MONTH = datetime.now().strftime("%-m")
 TODAY_DAY   = datetime.now().strftime("%-d")
@@ -21,9 +22,9 @@ STOCK_NAME_LIST = "\n".join(f"- {name}" for name in STOCK_CODES.keys())
 OPENING_NARRATION = (
     f"안녕하세요. 머니올라 구독자 여러분. "
     f"{TODAY_MONTH}월 {TODAY_DAY}일 AI 주식 브리핑 시작하겠습니다. "
-    f"이 브리핑은 뉴스와 유튜브 채널, 증권사 보고서를 분석한 "
-    f"AI 기반의 자동 생성 자료이며, 종목별 주까 전망과 "
-    f"오늘의 투자 전략을 소개해드립니다."
+    f"이 브리핑은 최근 이십사 시간 이내의 경제 뉴스와 인기 경제 유튜브 채널, "
+    f"그리고 증권사 애널리스트 보고서를 분석한 자료입니다. "
+    f"AI 기반으로 자동 생성되며, 종목별 투자 전략을 소개해드립니다."
 )
 
 CLOSING_NARRATION = (
@@ -56,81 +57,53 @@ def fetch_briefing():
 def generate_script(briefing_text):
     system_prompt = f"""
 당신은 경제 방송 작가입니다. 주식 브리핑 데이터를 분석하여 방송용 내레이션 원고와 화면 구성 데이터를 JSON으로 생성하세요.
-
 오늘 날짜: {TODAY}
 
 ## 종목명 표기 규칙 (반드시 준수)
 종목명을 JSON의 id 필드에 사용할 때는 아래 목록의 정확한 표기를 그대로 사용하세요.
-
 [허용 종목명 목록]
 {STOCK_NAME_LIST}
-
 위 목록에 없는 종목이 등장하면 가장 유사한 목록의 종목명을 사용하세요.
 
-## ★★★ TTS 발음 규칙 (절대 준수 — 위반 시 영상이 깨집니다) ★★★
+## 발음 규칙 (TTS용)
+- 숫자는 한글로: 65400 → 육만오천사백, 3% → 삼퍼센트
+- 주가 관련: 주가→주까, 신고가→신고까, 고가→고까, 저가→저까
+- 영어는 한글 발음: KOSPI→코스피, HBM→에이치비엠, ETF→이티에프, SK→에스케이, LG→엘지
+- 자연스럽고 명확한 구어체, 불필요한 간투어 없이
 
-narration 필드의 모든 텍스트는 TTS(음성합성) 엔진이 읽을 발음 그대로 작성합니다.
-
-### 숫자 → 반드시 한글로
-- 65,400원 → 육만오천사백원
-- 3,200원 → 삼천이백원
-- 1,250,000원 → 백이십오만원
-- 2,650 (지수) → 이천육백오십
-
-### 퍼센트 → 반드시 한글로
-- +3.3% → 플러스 삼쩜삼퍼센트
-- -1.5% → 마이너스 일쩜오퍼센트
-- +0.8% → 플러스 영쩜팔퍼센트
-- 2% → 이퍼센트
-
-### 소수점 → "쩜" 으로 (점 금지)
-- 3.3 → 삼쩜삼 (3.3이라고 쓰지 말 것)
-- 1.5 → 일쩜오
-
-### 주가 관련 단어 → 반드시 발음대로
-- 주가 → 주까
-- 신고가 → 신고까
-- 고가 → 고까
-- 저가 → 저까
-
-### 영어/약어 → 한글 발음
-- KOSPI → 코스피
-- KOSDAQ → 코스닥
-- HBM → 에이치비엠
-- ETF → 이티에프
-- AI → 에이아이
-- SK → 에스케이
-- LG → 엘지
-- KB → 케이비
-- HD → 에이치디
-
-### 잘못된 예시 vs 올바른 예시
-❌ 틀림: "주가는 65,400원으로 +3.3% 상승했습니다."
-✅ 맞음: "주까는 육만오천사백원으로 플러스 삼쩜삼퍼센트 상승했습니다."
-
-❌ 틀림: "KOSPI가 2,650포인트를 기록했습니다."
-✅ 맞음: "코스피가 이천육백오십포인트를 기록했습니다."
+## 브리핑 데이터 활용 원칙 (핵심)
+- 브리핑 데이터에 등장하는 **모든 종목**을 빠짐없이 설명하세요. stock_ 섹션과 hidden_ 섹션 모두 포함합니다.
+- 각 종목의 내레이션은 브리핑 원본의 내용을 최대한 충실하게, 충분히 길게 작성하세요.
+- 전문가 멘션(mentions)은 브리핑에 등재된 **모든 멘션**을 빠짐없이 읽어야 합니다.
+  - mentions 배열의 각 항목을 순서대로 모두 소개하세요.
+  - 각 멘션은 출처(source), 기자/애널리스트명(reporter/analyst), 핵심 내용(quote/report)을 모두 포함해 충분히 설명하세요.
+  - 예: "한국경제 홍길동 기자에 따르면, [상세 내용]. 또한 머니투데이방송 김철수 기자는 [상세 내용]을 보도했습니다."
+  - 멘션이 여러 페이지에 걸칠 경우, 각 페이지의 멘션을 해당 페이지에서 모두 읽어야 합니다. 중복 없이.
+- 전체 영상이 20분 이내가 되도록 충분히 상세하게 작성하세요.
 
 ## 화면별 narration 분리 규칙 (핵심 — 반드시 준수)
-stock_/hidden_ 섹션은 화면이 3개로 분리됩니다.
-각 화면에 맞는 narration을 반드시 별도 필드로 작성하세요.
+stock_/hidden_ 섹션은 화면이 3개로 분리됩니다. 각 화면에 맞는 narration을 반드시 별도 필드로 작성하세요.
 
 narration_summary (종목 소개 화면):
-- 코너 도입 멘트 + 종목 한 줄 소개 + 현재 주까와 등락률
-- 예: "다음은 삼성전자입니다. 삼성전자는 글로벌 반도체 및 전자기기 제조 기업입니다. 현재 주까는 육만오천사백원으로 전일 대비 플러스 일쩜이퍼센트 상승했습니다."
+- 코너 도입 멘트 + 종목 상세 소개(사업 내용, 시장 위치) + 현재 주까와 등락률 + 투자 포인트 전체 설명
+- 분량: 최소 5문장 이상, 브리핑의 summary·catalysts·risks 내용을 모두 포함
+- 예: "다음은 에스케이하이닉스입니다. 에스케이하이닉스는 글로벌 메모리 반도체 선두 기업으로, 디램과 낸드플래시를 주력으로 합니다. 현재 주까는 이십만천원으로 전일 대비 플러스 이점오퍼센트 상승했습니다. 주요 상승 촉매로는 첫째, 에이치비엠 삼이 양산 본격화..."
 
 narration_chart (최근 2주 차트 화면):
-- 최근 주까 흐름 + 상승 촉매 + 리스크
-- 예: "최근 이주간 주까 흐름을 보겠습니다. 육만이천원에서 육만오천원까지 상승했습니다. 주요 상승 촉매로는 에이치비엠 수주 확대와 파운드리 회복 기대감이 있으며, 리스크로는 미중 무역 갈등 재점화 가능성이 있습니다."
+- 최근 주까 흐름 상세 설명 + 주요 변곡점 설명 + 상승/하락 원인 분석 + 리스크 요인 전체 설명
+- 분량: 최소 5문장 이상
+- 예: "최근 이주간 주까 흐름을 보겠습니다. 초반 육만이천원에서 시작해..."
 
-narration_mention (전문가 멘션 화면):
-- mentions의 채널/기사/애널리스트 언급 내용만
-- 예: "한국경제 기사에 따르면 미래에셋 김정진 이사가 삼성전자 에스케이하이닉스 투자비중 오십퍼센트까지 늘려도 된다며 추가매수를 권고했습니다."
+narration_mention (전문가 멘션 화면 — 페이지별 별도 작성):
+- 해당 페이지에 표시되는 mentions를 모두 읽어야 합니다.
+- 각 멘션의 출처, 기자/애널리스트, 핵심 내용을 충분히 상세하게 설명하세요.
+- 멘션이 여러 페이지이면 narration_mention_0, narration_mention_1 등으로 페이지별 구분하세요.
+- 분량: 페이지당 최소 3문장 이상
 
 ## 일반 섹션 narration 규칙
-- market_summary 도입: "오늘의 주식시장 요약입니다."
-- sectors 도입: "오늘의 주목할 섹터입니다."
-- ai_strategy 도입: "마지막으로 에이아이가 제안하는 오늘의 투자전략입니다."
+- market_summary: "오늘의 주식시장 요약입니다." + 시장 상황 상세 설명(최소 4문장)
+- sectors: "오늘의 주목할 섹터입니다." + 각 섹터별 상세 설명(최소 4문장)
+- ai_strategy: "마지막으로 AI가 제안하는 오늘의 투자전략입니다." + 종목별 전략 상세 설명
 
 ## 출력 JSON 구조
 {{
@@ -146,16 +119,16 @@ narration_mention (전문가 멘션 화면):
     {{
       "id": "market_summary",
       "label": "시장 요약",
-      "narration": "오늘의 주식시장 요약입니다. [시장 분석 내용 — 숫자 한글 발음으로]",
+      "narration": "오늘의 주식시장 요약입니다. [상세 시장 분석 — 최소 4문장]",
       "kospi_value": "2,650",
       "kospi_change": "+1.2%",
-      "kospi_change_positive": true,
+      "kospi_change\_positive": true,
       "points": ["포인트1", "포인트2", "포인트3", "포인트4"]
     }},
     {{
       "id": "sectors",
       "label": "주목 섹터",
-      "narration": "오늘의 주목할 섹터입니다. [섹터 분석 내용]",
+      "narration": "오늘의 주목할 섹터입니다. [상세 섹터 분석 — 최소 4문장]",
       "sector_list": [
         {{"name": "섹터명", "desc": "설명", "icon": "이모지"}}
       ]
@@ -163,10 +136,12 @@ narration_mention (전문가 멘션 화면):
     {{
       "id": "stock_종목명",
       "label": "관심종목 - 종목명",
-      "narration": "[narration_summary 내용과 동일]",
-      "narration_summary": "코너 도입 + 종목 소개 + 현재 주까와 등락률 (숫자 한글)",
-      "narration_chart": "최근 이주간 주까 흐름 + 상승 촉매 + 리스크 (숫자 한글)",
-      "narration_mention": "전문가/채널/기사 언급 내용 (숫자 한글)",
+      "narration": "[narration_summary 내용]",
+      "narration_summary": "코너 도입 + 종목 상세 소개 + 현재 주까와 등락률 + 투자포인트 전체 (최소 5문장)",
+      "narration_chart": "최근 이주간 주까 흐름 상세 + 변곡점 + 촉매 + 리스크 전체 (최소 5문장)",
+      "narration_mention": "해당 페이지 mentions 전체를 상세히 읽기 (멘션이 1페이지인 경우)",
+      "narration_mention_0": "1페이지 mentions 전체 상세 읽기 (멘션이 2페이지 이상인 경우)",
+      "narration_mention_1": "2페이지 mentions 전체 상세 읽기",
       "summary": "기업 한 줄 소개",
       "price": "000,000",
       "change": "+0.00%",
@@ -174,16 +149,18 @@ narration_mention (전문가 멘션 화면):
       "catalysts": ["촉매1", "촉매2", "촉매3", "촉매4"],
       "risks": ["리스크1", "리스크2", "리스크3"],
       "mentions": [
-        {{"source": "채널명", "reporter": "기자/애널리스트명", "quote": "언급 내용"}}
+        {{"source": "채널명", "reporter": "기자/애널리스트명", "quote": "언급 내용 상세"}}
       ]
     }},
     {{
       "id": "hidden_종목명",
       "label": "히든종목 - 종목명",
-      "narration": "[narration_summary 내용과 동일]",
-      "narration_summary": "코너 도입 + 종목 소개 + 현재 주까와 등락률 (숫자 한글)",
-      "narration_chart": "최근 이주간 주까 흐름 + 상승 촉매 + 리스크 (숫자 한글)",
-      "narration_mention": "전문가/채널/기사 언급 내용 (숫자 한글)",
+      "narration": "[narration_summary 내용]",
+      "narration_summary": "히든픽 코너 도입 + 종목 상세 소개 + 현재 주까와 등락률 + 투자포인트 전체 (최소 5문장)",
+      "narration_chart": "최근 이주간 주까 흐름 상세 + 촉매 + 리스크 전체 (최소 5문장)",
+      "narration_mention": "해당 페이지 mentions 전체를 상세히 읽기 (멘션이 1페이지인 경우)",
+      "narration_mention_0": "1페이지 mentions 전체 상세 읽기 (멘션이 2페이지 이상인 경우)",
+      "narration_mention_1": "2페이지 mentions 전체 상세 읽기",
       "summary": "기업 한 줄 소개",
       "price": "000,000",
       "change": "+0.00%",
@@ -191,13 +168,13 @@ narration_mention (전문가 멘션 화면):
       "catalysts": ["촉매1", "촉매2"],
       "risks": ["리스크1", "리스크2"],
       "mentions": [
-        {{"source": "채널명", "analyst": "애널리스트명", "report": "보고서 핵심"}}
+        {{"source": "채널명", "analyst": "애널리스트명", "report": "보고서 핵심 상세"}}
       ]
     }},
     {{
       "id": "ai_strategy",
       "label": "AI 투자 전략",
-      "narration": "마지막으로 에이아이가 제안하는 오늘의 투자전략입니다. [전략 내용 — 숫자 한글]",
+      "narration": "마지막으로 AI가 제안하는 오늘의 투자전략입니다. [종목별 전략 상세 설명]",
       "bullet_points": ["종목명 — 전략 내용"]
     }},
     {{
@@ -212,10 +189,11 @@ narration_mention (전문가 멘션 화면):
 ## 주의사항
 - opening narration은 반드시 "__OPENING__" 그대로 출력
 - closing narration은 반드시 "__CLOSING__" 그대로 출력
-- stock_/hidden_ 섹션은 narration_summary, narration_chart, narration_mention 세 필드를 반드시 모두 작성
-- narration 필드는 narration_summary 와 동일하게 작성
+- stock_/hidden_ 섹션은 narration_summary, narration_chart, narration_mention(또는 narration_mention_0, narration_mention_1...) 필드를 반드시 모두 작성
+- narration 필드는 narration_summary와 동일하게 작성
+- 브리핑에 등장하는 모든 종목(stock_ 및 hidden_)을 반드시 포함할 것
 - 반드시 순수 JSON만 출력, 마크다운 블록 없이
-- ★ narration의 모든 숫자와 퍼센트는 반드시 한글 발음으로 작성 ★
+- max_tokens 한도 내에서 최대한 상세하게 작성
 """
 
     response = client.chat.completions.create(
@@ -225,7 +203,7 @@ narration_mention (전문가 멘션 화면):
             {"role": "user",   "content": f"다음 브리핑 데이터를 분석하여 JSON 원고를 생성하세요:\n\n{briefing_text}"}
         ],
         temperature=0.7,
-        max_tokens=8000
+        max_tokens=16000   # 8000 → 16000 으로 증가 (상세 원고 대응)
     )
 
     raw = response.choices[0].message.content.strip()
@@ -233,11 +211,11 @@ narration_mention (전문가 멘션 화면):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-        raw = raw.strip()
+    raw = raw.strip()
 
     script = json.loads(raw)
 
-    # 오프닝/클로징 고정 텍스트 교체
+    # 오프닝/클로징 narration 고정 텍스트로 교체
     for sec in script.get("sections", []):
         if sec.get("id") == "opening":
             sec["narration"] = OPENING_NARRATION
