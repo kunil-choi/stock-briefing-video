@@ -15,8 +15,7 @@ SUBTITLE_SIZE      = 34
 SUBTITLE_COLOR     = "white"
 SUBTITLE_BOX_COLOR = "0x000000@0.55"
 SUBTITLE_Y_BASE    = "h-160"
-# 자막 한 줄 최대 글자 수 (한글 기준 약 20자 = 1920px 화면에 여백 포함)
-SUBTITLE_MAX_CHARS = 20
+SUBTITLE_MAX_CHARS = 20   # 자막 한 줄 최대 글자 수
 
 
 # ── BGM ──────────────────────────────────────────────────────────────────
@@ -48,99 +47,138 @@ def get_audio_duration(mp3_path: str) -> float:
 def _narration_to_subtitle(text: str) -> str:
     """TTS용 한글 발음 표기를 자막용 표준어·아라비아 숫자로 변환"""
 
-    # 1) 발음 교정
+    # ── 1) 발음 교정 ──────────────────────────────────────────────────────
     REPLACEMENTS = [
-        ('주까',      '주가'),
-        ('신고까',    '신고가'),
-        ('고까',      '고가'),
-        ('저까',      '저가'),
-        ('에이치비엠','HBM'),
-        ('이티에프',  'ETF'),
-        ('코스피',    'KOSPI'),
-        ('코스닥',    'KOSDAQ'),
-        ('에스케이',  'SK'),
-        ('엘지',      'LG'),
-        ('케이비',    'KB'),
-        ('엔에이치',  'NH'),
+        ('주까',       '주가'),
+        ('신고까',     '신고가'),
+        ('고까',       '고가'),
+        ('저까',       '저가'),
+        ('에이치비엠', 'HBM'),
+        ('이티에프',   'ETF'),
+        ('코스피',     'KOSPI'),
+        ('코스닥',     'KOSDAQ'),
+        ('에스케이',   'SK'),
+        ('엘지',       'LG'),
+        ('케이비',     'KB'),
+        ('엔에이치',   'NH'),
     ]
     for src, dst in REPLACEMENTS:
         text = text.replace(src, dst)
 
-    # 2) 한글 숫자 → 아라비아 숫자
+    # ── 2) 한글 숫자 → 아라비아 숫자 변환 ────────────────────────────────
+    # 지원 범위: 영~구십구억구천구백구십구 (99,999,999,999)
     HNUMS = {
         '영': 0, '일': 1, '이': 2, '삼': 3, '사': 4,
         '오': 5, '육': 6, '칠': 7, '팔': 8, '구': 9,
     }
-    UNITS  = {'십': 10, '백': 100, '천': 1_000}
-    BIG    = {'만': 10_000, '억': 100_000_000}
+    SMALL_UNITS = {'십': 10, '백': 100, '천': 1_000}
     KOR_PAT = r'[영일이삼사오육칠팔구십백천만억]+'
 
+    def _parse_small(s: str):
+        """
+        천 미만 구간 파싱: '칠천오백' 같은 혼합 표현 처리.
+        ex) '칠천오백' → 7500,  '이십삼' → 23,  '오' → 5
+        실패 시 None 반환.
+        """
+        if not s:
+            return 0
+        result = 0
+        current = 0   # 이전에 읽은 1~9 숫자
+        for ch in s:
+            if ch in HNUMS:
+                current = HNUMS[ch]
+            elif ch in SMALL_UNITS:
+                # 단위 앞 숫자가 없으면 1로 처리 (e.g. '십' → 10)
+                result += (current if current != 0 else 1) * SMALL_UNITS[ch]
+                current = 0
+            else:
+                return None   # 알 수 없는 문자
+        result += current
+        return result
+
     def kor_to_int(s: str):
+        """
+        한글 숫자 문자열을 정수로 변환.
+        억/만 단위 분리 후 _parse_small 으로 나머지 처리.
+        """
         s = s.strip()
         if not s:
             return None
-        def _chunk(c):
-            if not c:
-                return 0
-            res, cur = 0, 0
-            for ch in c:
-                if ch in HNUMS:
-                    cur = HNUMS[ch]
-                elif ch in UNITS:
-                    res += (cur if cur else 1) * UNITS[ch]; cur = 0
-                else:
-                    return None
-            return res + cur
         total = 0
-        if '억' in s:
-            i = s.index('억')
-            v = _chunk(s[:i]);
-            if v is None: return None
-            total += v * 100_000_000; s = s[i+1:]
-        if '만' in s:
-            i = s.index('만')
-            v = _chunk(s[:i])
-            if v is None: return None
-            total += v * 10_000; s = s[i+1:]
-        v = _chunk(s)
-        if v is None: return None
-        return total + v
 
-    # 소수점 처리: 삼점삼 / 삼쩜삼 → 3.3
+        # 억 단위 분리
+        if '억' in s:
+            idx = s.index('억')
+            v = _parse_small(s[:idx])
+            if v is None:
+                return None
+            total += (v if v != 0 else 1) * 100_000_000
+            s = s[idx + 1:]
+
+        # 만 단위 분리
+        if '만' in s:
+            idx = s.index('만')
+            v = _parse_small(s[:idx])
+            if v is None:
+                return None
+            total += (v if v != 0 else 1) * 10_000
+            s = s[idx + 1:]
+
+        # 나머지 (천 이하)
+        v = _parse_small(s)
+        if v is None:
+            return None
+        total += v
+        return total if total > 0 else None
+
+    # 2-a) 소수점: '삼점삼' / '삼쩜삼' → '3.3'
     def repl_decimal(m):
         i_n = kor_to_int(m.group(1))
-        if i_n is None: return m.group(0)
+        if i_n is None:
+            return m.group(0)
         dec = "".join(str(HNUMS[c]) for c in m.group(2) if c in HNUMS)
-        if not dec: return m.group(0)
+        if not dec:
+            return m.group(0)
         return f"{i_n}.{dec}"
+
     text = re.sub(rf'({KOR_PAT})[점쩜]({KOR_PAT})', repl_decimal, text)
 
-    # 퍼센트 처리
+    # 2-b) 퍼센트: '삼퍼센트' / '플러스일점이퍼센트' → '3%' / '+1.2%'
     def repl_pct(m):
-        sign = "+" if "플러스" in (m.group(1) or "") else ("-" if "마이너스" in (m.group(1) or "") else "")
-        num  = m.group(2)
+        sign = ("+" if "플러스" in (m.group(1) or "")
+                else "-" if "마이너스" in (m.group(1) or "")
+                else "")
+        num = m.group(2)
+        # 이미 아라비아 숫자(소수점 변환 후)
         if re.match(r'^[\d.]+$', num):
             return f"{sign}{num}%"
         n = kor_to_int(num)
         return f"{sign}{n}%" if n is not None else m.group(0)
-    text = re.sub(r'(플러스|마이너스)?([\d.영일이삼사오육칠팔구십백천만억]+)퍼센트', repl_pct, text)
 
-    # 원화 금액
+    text = re.sub(
+        r'(플러스|마이너스)?([\d.영일이삼사오육칠팔구십백천만억]+)퍼센트',
+        repl_pct, text
+    )
+
+    # 2-c) 원화: '칠천오백원' → '7,500원'
     def repl_won(m):
         kor = m.group(1)
-        if re.match(r'^[\d,]+$', kor): return m.group(0)
+        if re.match(r'^[\d,]+$', kor):
+            return m.group(0)
         n = kor_to_int(kor)
         return f"{n:,}원" if n is not None else m.group(0)
+
     text = re.sub(rf'({KOR_PAT})원', repl_won, text)
 
-    # 단위 앞 한글 숫자
+    # 2-d) 단위 앞 한글 숫자: '이십사시간' → '24시간'
     UNIT_SFX = r'(?=개|명|회|번|배|년|월|일|시|분|초|주|장|종목|시간|일간|주간|번째)'
     def repl_unit(m):
         n = kor_to_int(m.group(1))
-        return f"{n:,}" if n else m.group(0)
+        return f"{n:,}" if n is not None else m.group(0)
+
     text = re.sub(rf'({KOR_PAT}){UNIT_SFX}', repl_unit, text)
 
-    # 부호 정리
+    # ── 3) 부호 정리 ──────────────────────────────────────────────────────
     text = re.sub(r'플러스\s*', '+', text)
     text = re.sub(r'마이너스\s*', '-', text)
 
@@ -148,37 +186,39 @@ def _narration_to_subtitle(text: str) -> str:
 
 
 # ── 자막 줄 분할 ──────────────────────────────────────────────────────────
-def _split_lines(text: str, max_chars: int = SUBTITLE_MAX_CHARS) -> list[str]:
+def _split_lines(text: str, max_chars: int = SUBTITLE_MAX_CHARS) -> list:
     """
-    문장부호(。.!?…)와 접속사 앞에서 우선 끊고,
-    그래도 max_chars를 초과하면 글자 수 기준으로 추가 분할.
+    문장부호 위치를 우선 분할 기준으로 삼고,
+    그래도 max_chars를 초과하면 공백·글자 단위로 추가 분할.
+    반환값은 순수 문자열 리스트 (줄바꿈 문자 없음).
     """
-    # 1단계: 문장 단위 분할
+    # 문장 단위 1차 분할
     sentences = re.split(r'(?<=[.!?。…])\s*', text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
 
     lines = []
     for sent in sentences:
-        # 2단계: max_chars 초과 시 공백 기준 재분할
         if len(sent) <= max_chars:
             lines.append(sent)
         else:
             words = sent.split()
             cur = ""
             for w in words:
-                if len(cur) + len(w) + (1 if cur else 0) <= max_chars:
-                    cur = (cur + " " + w).strip()
+                candidate = (cur + " " + w).strip() if cur else w
+                if len(candidate) <= max_chars:
+                    cur = candidate
                 else:
                     if cur:
                         lines.append(cur)
-                    # 단어 자체가 max_chars 초과면 글자 단위로 강제 분할
+                    # 단어 자체가 max_chars 초과 → 글자 단위 강제 분할
                     while len(w) > max_chars:
                         lines.append(w[:max_chars])
                         w = w[max_chars:]
                     cur = w
             if cur:
                 lines.append(cur)
-    return lines
+
+    return lines if lines else [text[:max_chars]]
 
 
 # ── SRT 파일 생성 ─────────────────────────────────────────────────────────
@@ -188,36 +228,32 @@ def _sec_to_srt_time(s: float) -> str:
     m  = int((s % 3600) // 60)
     sc = int(s % 60)
     ms = int(round((s % 1) * 1000))
+    if ms >= 1000:
+        ms = 999
     return f"{h:02d}:{m:02d}:{sc:02d},{ms:03d}"
 
 
 def _make_srt(subtitle_text: str, duration: float, srt_path: str):
     """
-    자막 텍스트를 줄 단위로 분할하고 duration 을 균등 배분하여 SRT 파일 생성.
-    마지막 자막은 duration 끝까지 표시.
+    자막을 줄 단위로 분할 → 오디오 시간을 균등 배분 → SRT 파일 저장.
+    각 줄은 최소 1.2초 보장, 마지막 줄은 duration 끝까지 표시.
     """
     lines = _split_lines(subtitle_text)
-    if not lines:
-        lines = [subtitle_text[:SUBTITLE_MAX_CHARS]] if subtitle_text else [""]
-
     n = len(lines)
-    # 각 줄의 표시 시간 = 전체 duration / 줄 수  (최소 1.2초 보장)
-    per = max(duration / n, 1.2)
+    per = max(duration / n, 1.2)   # 줄당 최소 1.2초
 
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, line in enumerate(lines):
             start = i * per
-            # 마지막 줄은 duration 끝까지
             end   = duration if i == n - 1 else min((i + 1) * per, duration)
-            # 끝 시간이 시작 시간보다 짧아지는 예외 방지
             if end <= start:
                 end = start + 1.0
-            f.write(f"{i+1}\n")
+            f.write(f"{i + 1}\n")
             f.write(f"{_sec_to_srt_time(start)} --> {_sec_to_srt_time(end)}\n")
             f.write(f"{line}\n\n")
 
 
-# ── 섹션 영상 생성 (SRT 자막 방식) ───────────────────────────────────────
+# ── 섹션 영상 생성 (SRT 자막) ─────────────────────────────────────────────
 def build_section_video(
     png_path:  str,
     mp3_path:  str,
@@ -225,27 +261,25 @@ def build_section_video(
     out_path:  str,
     font_path: str
 ) -> bool:
-    """PNG + MP3 → 섹션 MP4  (SRT 자막으로 순차 표시)"""
+    """PNG + MP3 → 섹션 MP4  (SRT 자막으로 순차 표시, 양쪽 짤림 없음)"""
     duration = get_audio_duration(mp3_path)
 
-    # 임시 SRT 파일 생성
+    # 임시 SRT 파일
     srt_fd, srt_path = tempfile.mkstemp(suffix=".srt")
     os.close(srt_fd)
 
     try:
         _make_srt(subtitle, duration, srt_path)
 
-        # subtitles 필터 옵션
-        font_opt = ""
+        # subtitles 필터: fontsdir 로 커스텀 폰트 경로 지정
+        abs_srt = srt_path.replace("\\", "/").replace(":", "\\:")
+        font_dir_opt = ""
         if os.path.exists(font_path):
-            # ffmpeg subtitles 필터의 force_style 에서 폰트 파일 직접 지정은
-            # ASS 스타일로만 가능 → FontName 으로 시스템 폰트명 지정 대신
-            # fontsdir 옵션 사용
-            font_dir = os.path.dirname(os.path.abspath(font_path))
-            font_opt = f":fontsdir={font_dir}"
+            font_dir = os.path.dirname(os.path.abspath(font_path)).replace("\\", "/")
+            font_dir_opt = f":fontsdir={font_dir}"
 
         sub_filter = (
-            f"subtitles={srt_path}{font_opt}"
+            f"subtitles='{abs_srt}'{font_dir_opt}"
             f":force_style='"
             f"FontSize={SUBTITLE_SIZE},"
             f"PrimaryColour=&H00FFFFFF,"
@@ -254,7 +288,7 @@ def build_section_video(
             f"Outline=0,"
             f"Shadow=0,"
             f"MarginV=60,"
-            f"Alignment=2'"          # Alignment=2 → 하단 중앙
+            f"Alignment=2'"
         )
 
         cmd = [
@@ -276,7 +310,8 @@ def build_section_video(
             print(result.stderr[-600:])
             return False
 
-        print(f"  ✅ {os.path.basename(out_path)} ({duration:.1f}초, 자막 {len(_split_lines(subtitle))}줄)")
+        n_lines = len(_split_lines(subtitle))
+        print(f"  ✅ {os.path.basename(out_path)} ({duration:.1f}초, 자막 {n_lines}줄)")
         return True
 
     finally:
@@ -449,15 +484,6 @@ def run(lang: str = "KO"):
 
     download_bgm(bgm_path)
 
-    # libass 설치 확인 (subtitles 필터 의존)
-    probe = subprocess.run(
-        ["ffmpeg", "-filters"],
-        capture_output=True, text=True
-    )
-    if "subtitles" not in probe.stdout:
-        print("⚠️  ffmpeg subtitles 필터 없음 → libass 설치 필요")
-        print("   Ubuntu: sudo apt-get install -y libass-dev")
-
     section_videos = []
     print(f"\n🎬 섹션 영상 생성 시작\n")
 
@@ -497,8 +523,10 @@ def run(lang: str = "KO"):
 
     os.remove(merged_path)
     for v in section_videos:
-        try: os.remove(v)
-        except Exception: pass
+        try:
+            os.remove(v)
+        except Exception:
+            pass
 
     size_mb = os.path.getsize(final_path) / (1024 * 1024)
     print(f"\n✅ 최종 영상 완성! {size_mb:.1f} MB → {final_path}")
