@@ -12,11 +12,12 @@ from .image_fetch import fetch_news_image
 
 Y_MAX    = H - 80
 MARGIN_X = 80
-CX       = W // 2   # 중앙 정렬 x
+CX       = W // 2
 
-# 자막 영역 — 하단 바(52px) 바로 위, 차트와 겹치지 않는 위치
+# 자막 영역 상수
+# 폰트 17px 기준으로 한 줄 높이 약 22px, 여유 포함 40px로 충분
 CHART_BOTTOM  = H - 200
-SUBTITLE_H    = 72
+SUBTITLE_H    = 40   # 50% 축소: 기존 72 → 40 (한 줄 기준, 두 줄 넘으면 스크롤 없이 clamp)
 SUBTITLE_Y    = H - 52 - SUBTITLE_H  # 하단 바 바로 위
 
 
@@ -62,15 +63,17 @@ def _paste_fill(img: Image.Image, path: str, box: tuple):
 
 def _draw_subtitle_bar(draw: ImageDraw.ImageDraw, text: str):
     """
-    차트 슬라이드 자막 바:
-    - 위치: 하단 바(H-52) 바로 위 SUBTITLE_Y
-    - 반투명 검정 배경 + 흰 글씨
-    - 폰트 크기: 34px
-    - 텍스트가 길면 두 줄로 줄바꿈
+    자막 바:
+    - 폰트 17px (기존 34px의 50%)
+    - SUBTITLE_H = 40px (기존 72px의 50% 근사값)
+    - 하단 바 바로 위 고정 위치
+    - 텍스트가 길면 두 줄로 줄바꿈 (각 줄 17px)
+    - 내레이션 원문 그대로 표시
     """
     if not text:
         return
 
+    # 반투명 검정 배경
     overlay = Image.new("RGBA", (W, SUBTITLE_H), (0, 0, 0, 180))
     base = draw._image
     base_rgba = base.convert("RGBA")
@@ -78,16 +81,18 @@ def _draw_subtitle_bar(draw: ImageDraw.ImageDraw, text: str):
     merged = Image.alpha_composite(base_rgba, Image.new("RGBA", base.size, (0, 0, 0, 0)))
     base.paste(merged.convert("RGB"))
 
-    font = fnt(34, bold=True)
-    max_w = W - MARGIN_X * 2
-    line1 = ""
-    line2 = ""
+    # 폰트 17px (기존 34px의 50%)
+    font     = fnt(17, bold=False)
+    max_w    = W - MARGIN_X * 2
+    line1    = ""
+    line2    = ""
+
     for ch in text:
         test = line1 + ch
         try:
             tw = int(draw.textlength(test, font=font))
         except Exception:
-            tw = len(test) * 17
+            tw = len(test) * 9
         if tw > max_w and line1:
             if not line2:
                 line2 = ch
@@ -96,14 +101,16 @@ def _draw_subtitle_bar(draw: ImageDraw.ImageDraw, text: str):
         else:
             line1 = test
 
+    # 세로 중앙 배치
+    line_h = 19  # 17px 폰트 행간
     if line2:
-        draw.text((CX, SUBTITLE_Y + 14), line1,
-                  font=font, fill=C["white"], anchor="mt")
-        draw.text((CX, SUBTITLE_Y + 14 + 38), line2,
-                  font=font, fill=C["white"], anchor="mt")
+        total_text_h = line_h * 2 + 2
+        start_y = SUBTITLE_Y + (SUBTITLE_H - total_text_h) // 2
+        draw.text((CX, start_y),           line1, font=font, fill=C["white"], anchor="mt")
+        draw.text((CX, start_y + line_h + 2), line2, font=font, fill=C["white"], anchor="mt")
     else:
-        draw.text((CX, SUBTITLE_Y + SUBTITLE_H // 2 - 18), line1,
-                  font=font, fill=C["white"], anchor="mt")
+        center_y = SUBTITLE_Y + (SUBTITLE_H - line_h) // 2
+        draw.text((CX, center_y), line1, font=font, fill=C["white"], anchor="mt")
 
 
 # ── 오프닝 ─────────────────────────────────────────────────────────────────
@@ -149,6 +156,8 @@ def build_market_summary(data, out_dir):
     change   = sec.get("kospi_change", "")
     positive = sec.get("kospi_change_positive", True)
     points   = sec.get("points", [])
+    # 자막: narration 원문 그대로
+    subtitle_text = sec.get("narration", "")
 
     cy = 100
     if kospi:
@@ -169,8 +178,10 @@ def build_market_summary(data, out_dir):
     draw_divider(draw, cy)
     cy += 40
 
+    # 포인트 목록은 자막 바와 겹치지 않도록 usable_bottom 기준으로 제한
+    usable_bottom = SUBTITLE_Y if subtitle_text else Y_MAX
     for point in points[:5]:
-        if cy >= Y_MAX - 20:
+        if cy >= usable_bottom - 20:
             break
         display_text = f"• {point}"
         cy = draw_wrapped_text(
@@ -184,6 +195,9 @@ def build_market_summary(data, out_dir):
         )
         cy += 10
 
+    # 자막 바: narration 원문
+    _draw_subtitle_bar(draw, subtitle_text)
+
     draw_bottombar(draw)
     path = os.path.join(out_dir, "01_market_00.png")
     return [_save(img, path)]
@@ -196,7 +210,8 @@ def build_sector(data, out_dir):
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, "업종 분석", color=C["blue"])
 
-    sector_list = sec.get("sector_list", sec.get("sectors", sec.get("list", [])))
+    sector_list   = sec.get("sector_list", sec.get("sectors", sec.get("list", [])))
+    subtitle_text = sec.get("narration", "")
 
     cy = 100
     draw.text((CX, cy), "오늘의 주목 업종",
@@ -208,6 +223,7 @@ def build_sector(data, out_dir):
     palette = [C["gold"], C["green"], C["blue"], (220,100,220), C["red"], (100,220,220)]
     card_w  = (W - MARGIN_X * 2 - 40) // 2
     card_h  = 150
+    usable_bottom = SUBTITLE_Y if subtitle_text else Y_MAX
 
     for idx, sector in enumerate(sector_list[:6]):
         color = palette[idx % len(palette)]
@@ -221,7 +237,7 @@ def build_sector(data, out_dir):
         row    = idx // 2
         card_x = MARGIN_X + col * (card_w + 40)
         card_y = cy + row * (card_h + 20)
-        if card_y + card_h > Y_MAX:
+        if card_y + card_h > usable_bottom:
             break
 
         draw.rounded_rectangle(
@@ -237,6 +253,7 @@ def build_sector(data, out_dir):
                               card_w - 50, size=27,
                               color=(180, 180, 200), line_gap=8)
 
+    _draw_subtitle_bar(draw, subtitle_text)
     draw_bottombar(draw)
     return _save(img, os.path.join(out_dir, "02_sector.png"))
 
@@ -250,6 +267,8 @@ def _build_stock_summary(sec, out_path, img_dir):
     summary    = sec.get("summary", "")
     catalysts  = sec.get("catalysts", [])
     risks      = sec.get("risks", [])
+    # 자막: narration_summary 원문
+    subtitle_text = sec.get("narration_summary", sec.get("narration", ""))
 
     img  = new_frame()
     draw = ImageDraw.Draw(img)
@@ -262,6 +281,8 @@ def _build_stock_summary(sec, out_path, img_dir):
     img_path = fetch_news_image(stock_name, img_dir, [])
     if img_path:
         paste_image(img, img_path, (W - 480, 84, W - 44, 400))
+
+    usable_bottom = SUBTITLE_Y if subtitle_text else Y_MAX
 
     cy = 100
     draw.text((MARGIN_X, cy), stock_name,
@@ -297,7 +318,7 @@ def _build_stock_summary(sec, out_path, img_dir):
                   font=fnt(34, bold=True), fill=C["red"])
         ty = cy + 48
         for c in catalysts[:4]:
-            if ty >= Y_MAX: break
+            if ty >= usable_bottom: break
             ty = draw_wrapped_text(draw, f"• {c}", MARGIN_X, ty,
                                    half_w, size=28, line_gap=8)
     if risks:
@@ -306,10 +327,11 @@ def _build_stock_summary(sec, out_path, img_dir):
                   font=fnt(34, bold=True), fill=C["blue"])
         ty = cy + 48
         for r in risks[:3]:
-            if ty >= Y_MAX: break
+            if ty >= usable_bottom: break
             ty = draw_wrapped_text(draw, f"• {r}", rx, ty,
                                    half_w, size=28, line_gap=8)
 
+    _draw_subtitle_bar(draw, subtitle_text)
     draw_bottombar(draw, stock_name)
     return _save(img, out_path)
 
@@ -317,7 +339,8 @@ def _build_stock_summary(sec, out_path, img_dir):
 # ── 종목 차트 슬라이드 ──────────────────────────────────────────────────────
 def _build_stock_chart(sec, out_path, img_dir):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    subtitle_text = sec.get("subtitle_chart", sec.get("narration_chart", ""))
+    # 자막: narration_chart 원문 (subtitle_chart 아님)
+    subtitle_text = sec.get("narration_chart", sec.get("narration", ""))
 
     img  = new_frame()
     draw = ImageDraw.Draw(img)
@@ -325,14 +348,12 @@ def _build_stock_chart(sec, out_path, img_dir):
 
     chart_path = build_chart_image(stock_name, img_dir)
     if chart_path:
-        # 차트는 topbar(74px) ~ CHART_BOTTOM(H-200) 영역에 배치
         _paste_fill(img, chart_path, (0, 74, W, CHART_BOTTOM))
     else:
         draw.text((CX, H // 2), f"{stock_name} 차트 데이터 없음",
                   font=fnt(40), fill=(120, 120, 140), anchor="mm")
 
     _draw_subtitle_bar(draw, subtitle_text)
-
     draw_bottombar(draw, stock_name)
     return _save(img, out_path)
 
@@ -341,35 +362,26 @@ def _build_stock_chart(sec, out_path, img_dir):
 def _build_mention_page(sec, out_path, page_idx):
     """
     전문가 멘션 슬라이드.
-
-    JSON 구조 우선순위:
-      1) mentions 배열 (구조화된 데이터) — [{source, reporter, quote}, ...]
-      2) narration_mention_0/1 텍스트 (page_idx에 따라 분기)
-      3) narration_mention 텍스트 (단일 슬라이드)
-
-    각 카드에는 source(매체/증권사), reporter(애널리스트/기자), quote(언급 내용)를
-    표시하며, subtitle_mention/_0/_1이 있으면 하단 자막 바로 표시합니다.
+    자막은 narration_mention 원문 그대로 표시.
     """
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
 
-    # ── 자막 텍스트 선택 (subtitle_mention_0/1 → subtitle_mention 순) ──
+    # 자막: narration_mention 원문
     if page_idx == 0:
-        subtitle_text = sec.get("subtitle_mention_0",
-                           sec.get("subtitle_mention", ""))
+        subtitle_text = sec.get("narration_mention_0",
+                           sec.get("narration_mention", ""))
     elif page_idx == 1:
-        subtitle_text = sec.get("subtitle_mention_1",
-                           sec.get("subtitle_mention", ""))
+        subtitle_text = sec.get("narration_mention_1",
+                           sec.get("narration_mention", ""))
     else:
-        subtitle_text = sec.get("subtitle_mention", "")
+        subtitle_text = sec.get("narration_mention", "")
 
-    # ── 멘션 카드 데이터 결정 ──
+    # 멘션 카드 데이터 결정
     mentions = sec.get("mentions", [])
 
     if mentions:
-        # 구조화된 배열이 있으면 페이지당 3개씩 슬라이싱
         page_mentions = mentions[page_idx * 3: page_idx * 3 + 3]
     else:
-        # narration_mention_0/1 또는 narration_mention 텍스트를 카드로 변환
         if page_idx == 0:
             narration_text = sec.get("narration_mention_0",
                                 sec.get("narration_mention", ""))
@@ -379,12 +391,10 @@ def _build_mention_page(sec, out_path, page_idx):
         else:
             narration_text = sec.get("narration_mention", "")
 
-        # 텍스트를 문단 단위로 쪼개어 카드 1~3장으로 분할
         paragraphs = [p.strip() for p in narration_text.split("\n\n") if p.strip()]
         if not paragraphs:
             paragraphs = [narration_text] if narration_text else []
 
-        # 문단이 하나뿐이면 마침표 기준으로 최대 3개로 분할 시도
         if len(paragraphs) == 1 and len(paragraphs[0]) > 120:
             sentences = paragraphs[0].replace("。", ".").split(". ")
             sentences = [s.strip() + ("." if not s.endswith(".") else "")
@@ -400,14 +410,12 @@ def _build_mention_page(sec, out_path, page_idx):
             for p in paragraphs[:3]
         ]
 
-    # ── 슬라이드 렌더링 ──
     img  = new_frame()
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, f"전문가 언급: {stock_name}", color=(40, 20, 60))
 
     cy    = 96
     n     = len(page_mentions)
-    # 자막 바 공간(SUBTITLE_H + 하단 바) 확보
     usable_bottom = SUBTITLE_Y if subtitle_text else Y_MAX
     card_h = min(260, (usable_bottom - cy - 20 * max(n, 1)) // max(n, 1))
 
@@ -441,10 +449,7 @@ def _build_mention_page(sec, out_path, page_idx):
                               size=30, color=C["white"], line_gap=12)
         cy += actual_h + 20
 
-    # ── 자막 바 렌더링 ──
-    if subtitle_text:
-        _draw_subtitle_bar(draw, subtitle_text)
-
+    _draw_subtitle_bar(draw, subtitle_text)
     draw_bottombar(draw, stock_name)
     return _save(img, out_path)
 
@@ -457,7 +462,6 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
             sec, os.path.join(out_dir, f"{prefix}_2_chart.png"), img_dir),
     ]
     mentions = sec.get("mentions", [])
-    # mentions 배열이 없을 때는 narration_mention 계열 텍스트로 페이지 수 결정
     if mentions:
         pages = max(1, (len(mentions) + 2) // 3)
     else:
@@ -481,6 +485,8 @@ def build_ai_strategy(data, out_dir):
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, "AI 투자 전략", color=(40, 20, 70))
 
+    subtitle_text = sec.get("narration", "")
+
     cy = 100
     draw.text((CX, cy), "AI 전략 투자 제안",
               font=fnt(56, bold=True), fill=C["white"], anchor="mm")
@@ -491,8 +497,10 @@ def build_ai_strategy(data, out_dir):
     bullet_points = sec.get("bullet_points",
                         sec.get("strategies", sec.get("items", [])))
     card_h = 110
+    usable_bottom = SUBTITLE_Y if subtitle_text else Y_MAX
+
     for bp in bullet_points[:6]:
-        if cy + card_h > Y_MAX:
+        if cy + card_h > usable_bottom:
             break
         text = bp if isinstance(bp, str) else \
                bp.get("strategy", bp.get("content", str(bp)))
@@ -514,6 +522,7 @@ def build_ai_strategy(data, out_dir):
                               size=30, color=C["white"], line_gap=10)
         cy += card_h + 16
 
+    _draw_subtitle_bar(draw, subtitle_text)
     draw_bottombar(draw)
     return _save(img, os.path.join(out_dir, "98_ai_strategy.png"))
 
