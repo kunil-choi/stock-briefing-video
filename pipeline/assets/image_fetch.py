@@ -16,7 +16,13 @@ HEADERS = {
 def _try_download(url: str, save_path: str) -> bool:
     try:
         r = requests.get(url, headers=HEADERS, timeout=8)
-        if r.status_code == 200 and len(r.content) > 2000:
+        # ── [오류 6 수정] Content-Type 검증 추가 ──
+        content_type = r.headers.get("Content-Type", "")
+        if (
+            r.status_code == 200
+            and len(r.content) > 2000
+            and "image" in content_type
+        ):
             with open(save_path, "wb") as f:
                 f.write(r.content)
             return True
@@ -38,7 +44,7 @@ def fetch_news_image(stock_name: str, img_dir: str,
 
     for url in candidates:
         if _try_download(url, save_path):
-            print(f"  [image] 수신 성공: {stock_name} ← {url[:60]}")
+            print(f"  [image] 이미지 성공: {stock_name} → {url[:60]}")
             return save_path
 
     print(f"  [image] 이미지 없음: {stock_name}")
