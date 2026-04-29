@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import time
+import sys
 
 MODEL_ID = "eleven_multilingual_v2"
 
@@ -41,25 +42,27 @@ def text_to_speech(text: str, output_path: str) -> bool:
             f.write(response.content)
         return True
     else:
-        print(f"  ❌ 오류: {response.status_code} - {response.text}")
+        print(f"  ❌ 실패: {response.status_code} - {response.text}")
         return False
 
 
-def run():
+def run(lang: str = "KO"):
+    # ── [오류 2 수정] KO 하드코딩 → lang 파라미터 사용 ──
+    lang = lang.upper()
+
     if not os.environ.get("ELEVENLABS_API_KEY"):
         raise EnvironmentError("❌ ELEVENLABS_API_KEY 환경변수가 설정되지 않았습니다.")
     if not os.environ.get("ELEVENLABS_VOICE_ID"):
         raise EnvironmentError("❌ ELEVENLABS_VOICE_ID 환경변수가 설정되지 않았습니다.")
 
-    script_path = "output/KO/scripts/script.json"
+    script_path = f"output/{lang}/scripts/script.json"
     with open(script_path, "r", encoding="utf-8") as f:
         script = json.load(f)
 
-    sections   = script["sections"]
-    total_jobs = 0
-    jobs       = []  # (narration_text, output_path, label)
+    sections    = script["sections"]
+    jobs        = []  # (narration_text, output_path, label)
 
-    # 더빙 작업 목록 구성
+    # 모든 섹션 순회하여 TTS 작업 목록 생성
     for section in sections:
         sid   = section.get("id", "")
         label = section.get("label", "")
@@ -69,7 +72,7 @@ def run():
         is_stock = sid.startswith("stock_") or sid.startswith("hidden_")
 
         if is_stock:
-            # 화면별 narration 3개 분리 생성
+            # 종목별 narration 3종 처리
             for suffix, field in [
                 ("_summary", "narration_summary"),
                 ("_chart",   "narration_chart"),
@@ -79,28 +82,28 @@ def run():
                 if text:
                     jobs.append((
                         text,
-                        f"output/KO/audio/{sid}{suffix}.mp3",
+                        f"output/{lang}/audio/{sid}{suffix}.mp3",
                         f"{label} [{suffix.strip('_')}]"
                     ))
         else:
-            # 일반 섹션: narration 하나
+            # 일반 섹션: narration 단일 처리
             narration = section.get("narration", "")
             if narration:
                 jobs.append((
                     narration,
-                    f"output/KO/audio/{sid}.mp3",
+                    f"output/{lang}/audio/{sid}.mp3",
                     label
                 ))
 
     total = len(jobs)
-    print(f"\n🎙️ 더빙 시작 — 총 {total}개 오디오\n")
+    print(f"\n🎙️ TTS 생성 시작 — 총 {total}개 작업\n")
 
     success_count = 0
     audio_files   = []
 
     for i, (text, out_path, label) in enumerate(jobs, 1):
         print(f"  [{i}/{total}] {label}")
-        print(f"    내레이션: {text[:40]}...")
+        print(f"    내용: {text[:40]}...")
 
         success = text_to_speech(text, out_path)
 
@@ -119,15 +122,16 @@ def run():
         "failed":  total - success_count,
         "files":   audio_files
     }
-    summary_path = "output/KO/audio/summary.json"
+    summary_path = f"output/{lang}/audio/summary.json"
     os.makedirs(os.path.dirname(summary_path), exist_ok=True)
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
     print(f"\n{'='*40}")
-    print(f"🎉 더빙 완료! 성공: {success_count}/{total}개")
+    print(f"🎉 TTS 완료! 성공: {success_count}/{total}개")
     print(f"{'='*40}\n")
 
 
 if __name__ == "__main__":
-    run()
+    lang = sys.argv[1] if len(sys.argv) > 1 else "KO"
+    run(lang)
