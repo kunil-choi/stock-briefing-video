@@ -46,8 +46,125 @@ def text_to_speech(text: str, output_path: str) -> bool:
         return False
 
 
+def _build_jobs(sections: list, lang: str) -> list:
+    """
+    script.json의 sections를 순회하며 TTS 작업 목록을 생성합니다.
+
+    mention 슬라이드 분할 규칙:
+    - mentions 배열 길이 1~3  → narration_mention  단일 파일
+    - mentions 배열 길이 4~6  → narration_mention_0, narration_mention_1
+    - mentions 배열 길이 7~9  → narration_mention_0, narration_mention_1, narration_mention_2
+    - mentions 배열이 없을 때  → narration_mention 계열 필드가 있으면 그대로 사용
+    """
+    jobs = []
+    audio_base = f"output/{lang}/audio"
+
+    for section in sections:
+        sid   = section.get("id", "")
+        label = section.get("label", sid)
+        if not sid:
+            continue
+
+        is_stock = sid.startswith("stock_") or sid.startswith("hidden_")
+
+        if is_stock:
+            # ── 1) summary 슬라이드 ──────────────────────────────────────
+            text = section.get("narration_summary", section.get("narration", ""))
+            if text:
+                jobs.append((
+                    text,
+                    f"{audio_base}/{sid}_summary.mp3",
+                    f"{label} [summary]"
+                ))
+
+            # ── 2) chart 슬라이드 ────────────────────────────────────────
+            text = section.get("narration_chart", section.get("narration", ""))
+            if text:
+                jobs.append((
+                    text,
+                    f"{audio_base}/{sid}_chart.mp3",
+                    f"{label} [chart]"
+                ))
+
+            # ── 3) mention 슬라이드 — 언급 수에 따라 페이지 분할 ────────
+            mentions = section.get("mentions", [])
+            n_mentions = len(mentions)
+
+            if n_mentions > 0:
+                # mentions 배열이 있을 때: 3개씩 끊어 페이지별 narration 필드 사용
+                pages = max(1, (n_mentions + 2) // 3)
+                if pages == 1:
+                    # 단일 슬라이드
+                    text = section.get("narration_mention", "")
+                    if not text:
+                        # narration_mention 필드 없으면 quote_narration 이어붙이기
+                        text = " ".join(
+                            m.get("quote_narration", m.get("quote", ""))
+                            for m in mentions[:3]
+                        )
+                    if text:
+                        jobs.append((
+                            text,
+                            f"{audio_base}/{sid}_mention.mp3",
+                            f"{label} [mention]"
+                        ))
+                else:
+                    # 복수 슬라이드: narration_mention_0, _1, _2 ...
+                    for p in range(pages):
+                        field = f"narration_mention_{p}"
+                        text  = section.get(field, "")
+                        if not text:
+                            # 필드 없으면 해당 페이지 quotes 이어붙이기
+                            page_items = mentions[p * 3: p * 3 + 3]
+                            text = " ".join(
+                                m.get("quote_narration", m.get("quote", ""))
+                                for m in page_items
+                            )
+                        if text:
+                            jobs.append((
+                                text,
+                                f"{audio_base}/{sid}_mention_{p:02d}.mp3",
+                                f"{label} [mention_page{p}]"
+                            ))
+            else:
+                # mentions 배열 없음 — narration_mention 계열 필드를 직접 사용
+                # 0번 페이지
+                text_0 = section.get("narration_mention_0",
+                              section.get("narration_mention", ""))
+                text_1 = section.get("narration_mention_1", "")
+                text_2 = section.get("narration_mention_2", "")
+
+                if text_1:
+                    # 복수 페이지
+                    for p, text in enumerate([text_0, text_1, text_2]):
+                        if text:
+                            jobs.append((
+                                text,
+                                f"{audio_base}/{sid}_mention_{p:02d}.mp3",
+                                f"{label} [mention_page{p}]"
+                            ))
+                elif text_0:
+                    # 단일 페이지
+                    jobs.append((
+                        text_0,
+                        f"{audio_base}/{sid}_mention.mp3",
+                        f"{label} [mention]"
+                    ))
+
+        else:
+            # ── 일반 섹션: narration 단일 처리 ──────────────────────────
+            narration = section.get("narration", "")
+            if narration:
+                jobs.append((
+                    narration,
+                    f"{audio_base}/{sid}.mp3",
+                    label
+                ))
+
+    return jobs
+
+
 def run(lang: str = "KO"):
-    # ── [오류 2 수정] KO 하드코딩 → lang 파라미터 사용 ──
     lang = lang.upper()
 
     if not os.environ.get("ELEVENLABS_API_KEY"):
@@ -59,41 +176,8 @@ def run(lang: str = "KO"):
     with open(script_path, "r", encoding="utf-8") as f:
         script = json.load(f)
 
-    sections    = script["sections"]
-    jobs        = []  # (narration_text, output_path, label)
-
-    # 모든 섹션 순회하여 TTS 작업 목록 생성
-    for section in sections:
-        sid   = section.get("id", "")
-        label = section.get("label", "")
-        if not sid:
-            continue
-
-        is_stock = sid.startswith("stock_") or sid.startswith("hidden_")
-
-        if is_stock:
-            # 종목별 narration 3종 처리
-            for suffix, field in [
-                ("_summary", "narration_summary"),
-                ("_chart",   "narration_chart"),
-                ("_mention", "narration_mention"),
-            ]:
-                text = section.get(field, section.get("narration", ""))
-                if text:
-                    jobs.append((
-                        text,
-                        f"output/{lang}/audio/{sid}{suffix}.mp3",
-                        f"{label} [{suffix.strip('_')}]"
-                    ))
-        else:
-            # 일반 섹션: narration 단일 처리
-            narration = section.get("narration", "")
-            if narration:
-                jobs.append((
-                    narration,
-                    f"output/{lang}/audio/{sid}.mp3",
-                    label
-                ))
+    sections = script.get("sections", [])
+    jobs     = _build_jobs(sections, lang)
 
     total = len(jobs)
     print(f"\n🎙️ TTS 생성 시작 — 총 {total}개 작업\n")
@@ -103,7 +187,7 @@ def run(lang: str = "KO"):
 
     for i, (text, out_path, label) in enumerate(jobs, 1):
         print(f"  [{i}/{total}] {label}")
-        print(f"    내용: {text[:40]}...")
+        print(f"    내용: {text[:60]}...")
 
         success = text_to_speech(text, out_path)
 
