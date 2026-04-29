@@ -12,10 +12,13 @@ from .image_fetch import fetch_news_image
 
 Y_MAX    = H - 80
 MARGIN_X = 80
-CX       = W // 2   # 화면 중앙 x
+CX       = W // 2   # 중앙 정렬 x
 
-# 자막 영역 확보를 위해 차트 하단 경계를 올림 (자막 높이 약 160px + 여유 20px)
-CHART_BOTTOM = H - 200   # 기존 H-62 → H-200 으로 변경
+# 자막 영역 — 하단 바(52px) 바로 위, 차트와 겹치지 않는 위치
+# 차트는 상단 74px ~ H-200(CHART_BOTTOM)까지 차지
+CHART_BOTTOM  = H - 200
+SUBTITLE_H    = 72   # 자막 배경 높이 (2줄 여유)
+SUBTITLE_Y    = H - 52 - SUBTITLE_H  # 하단 바 바로 위
 
 
 def _save(img, path):
@@ -39,7 +42,7 @@ def _color_change(val):
 
 
 def _paste_fill(img: Image.Image, path: str, box: tuple):
-    """차트/이미지를 box 영역에 꽉 채워서 붙입니다 (비율 유지, 중앙 크롭)."""
+    """비율/비율 box에 맞게 이미지를 꽉 채워 붙임 (크롭 후 리사이즈)."""
     if not path or not os.path.isfile(path):
         return
     try:
@@ -55,10 +58,61 @@ def _paste_fill(img: Image.Image, path: str, box: tuple):
         src   = src.crop((left, top, left + bw, top + bh))
         img.paste(src, (box[0], box[1]))
     except Exception as e:
-        print(f"[builders] 이미지 채우기 실패 ({path}): {e}")
+        print(f"[builders] 이미지 붙이기 실패 ({path}): {e}")
 
 
-# ── 오프닝 ───────────────────────────────────────────────────────────────
+def _draw_subtitle_bar(draw: ImageDraw.ImageDraw, text: str):
+    """
+    차트 슬라이드 자막 바:
+    - 위치: 하단 바(H-52) 바로 위 SUBTITLE_Y
+    - 반투명 검정 배경 + 흰 글씨
+    - 폰트 크기: 34 (기존 화면 글씨보다 작게)
+    - 텍스트가 길면 두 줄로 줄바꿈
+    """
+    if not text:
+        return
+
+    # 반투명 배경 오버레이 (알파 합성)
+    overlay = Image.new("RGBA", (W, SUBTITLE_H), (0, 0, 0, 180))
+    base = draw._image  # 현재 이미지 참조
+    base_rgba = base.convert("RGBA")
+    base_rgba.paste(overlay, (0, SUBTITLE_Y), overlay)
+    # RGB로 다시 변환해서 원본에 반영
+    merged = Image.alpha_composite(base_rgba, Image.new("RGBA", base.size, (0, 0, 0, 0)))
+    base.paste(merged.convert("RGB"))
+
+    # 텍스트 렌더링 — 최대 2줄, 폰트 34
+    font = fnt(34, bold=True)
+    max_w = W - MARGIN_X * 2
+    line1 = ""
+    line2 = ""
+    for ch in text:
+        test = line1 + ch
+        try:
+            tw = int(draw.textlength(test, font=font))
+        except Exception:
+            tw = len(test) * 17
+        if tw > max_w and line1:
+            if not line2:
+                line2 = ch
+            else:
+                line2 += ch
+        else:
+            line1 = test
+
+    # 한 줄 또는 두 줄 중앙 정렬
+    if line2:
+        # 두 줄: 세로 중앙 분배
+        draw.text((CX, SUBTITLE_Y + 14), line1,
+                  font=font, fill=C["white"], anchor="mt")
+        draw.text((CX, SUBTITLE_Y + 14 + 38), line2,
+                  font=font, fill=C["white"], anchor="mt")
+    else:
+        draw.text((CX, SUBTITLE_Y + SUBTITLE_H // 2 - 18), line1,
+                  font=font, fill=C["white"], anchor="mt")
+
+
+# ── 오프닝 ─────────────────────────────────────────────────────────────────
 def build_opening(data, out_dir):
     sec      = _find_section(data.get("sections", []), "opening")
     img      = new_frame()
@@ -71,7 +125,7 @@ def build_opening(data, out_dir):
         draw.line([0, i, W, i], fill=(30 + alpha, 32 + alpha, 80 + alpha))
 
     cy = H // 2 - 160
-    draw.text((CX, cy), "AI 주식 브리핑",
+    draw.text((CX, cy), "AI 증권 브리핑",
               font=fnt(80, bold=True), fill=C["white"], anchor="mm")
     cy += 100
     if date_str:
@@ -90,19 +144,18 @@ def build_opening(data, out_dir):
     return _save(img, os.path.join(out_dir, "00_opening.png"))
 
 
-# ── 시장 요약 ─────────────────────────────────────────────────────────────
+# ── 시장 요약 ───────────────────────────────────────────────────────────────
 def build_market_summary(data, out_dir):
     sec      = _find_section(data.get("sections", []), "market_summary")
     img      = new_frame()
     draw     = ImageDraw.Draw(img)
-    draw_topbar(draw, "시장 개요")
+    draw_topbar(draw, "시장 요약")
 
     kospi    = sec.get("kospi_value", "")
     change   = sec.get("kospi_change", "")
     positive = sec.get("kospi_change_positive", True)
     points   = sec.get("points", [])
 
-    # ── KOSPI 수치 블록 (상단 중앙) ──────────────────────────────────────
     cy = 100
     if kospi:
         draw.text((CX, cy), "KOSPI",
@@ -122,20 +175,18 @@ def build_market_summary(data, out_dir):
     draw_divider(draw, cy)
     cy += 40
 
-    # ── 포인트 목록 (글자 크게, 줄 간격 넉넉하게) ────────────────────────
     for point in points[:5]:
         if cy >= Y_MAX - 20:
             break
-        # 포인트 텍스트에서 한글 숫자를 아라비아 숫자로 변환
         display_text = f"• {point}"
         cy = draw_wrapped_text(
             draw, display_text,
             MARGIN_X, cy,
             W - MARGIN_X * 2,
-            size=36,           # 기존 32 → 36 으로 확대
+            size=36,
             bold=False,
             color=C["white"],
-            line_gap=16        # 기존 12 → 16 으로 확대
+            line_gap=16
         )
         cy += 10
 
@@ -144,17 +195,17 @@ def build_market_summary(data, out_dir):
     return [_save(img, path)]
 
 
-# ── 섹터 ─────────────────────────────────────────────────────────────────
+# ── 업종 분석 ───────────────────────────────────────────────────────────────
 def build_sector(data, out_dir):
     sec  = _find_section(data.get("sections", []), "sectors")
     img  = new_frame()
     draw = ImageDraw.Draw(img)
-    draw_topbar(draw, "주목 섹터", color=C["blue"])
+    draw_topbar(draw, "업종 분석", color=C["blue"])
 
     sector_list = sec.get("sector_list", sec.get("sectors", sec.get("list", [])))
 
     cy = 100
-    draw.text((CX, cy), "핵심 투자 섹터",
+    draw.text((CX, cy), "오늘의 주목 업종",
               font=fnt(52, bold=True), fill=C["white"], anchor="mm")
     cy += 20
     draw.line([CX - 200, cy + 20, CX + 200, cy + 20], fill=C["gold"], width=3)
@@ -196,7 +247,7 @@ def build_sector(data, out_dir):
     return _save(img, os.path.join(out_dir, "02_sector.png"))
 
 
-# ── 종목 요약 화면 ────────────────────────────────────────────────────────
+# ── 종목 요약 슬라이드 ──────────────────────────────────────────────────────
 def _build_stock_summary(sec, out_path, img_dir):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
     price      = sec.get("price", "")
@@ -209,17 +260,15 @@ def _build_stock_summary(sec, out_path, img_dir):
     img  = new_frame()
     draw = ImageDraw.Draw(img)
 
-    is_hidden = sec.get("id", "").startswith("hidden_")
-    bar_color = C.get("hidden_accent", (80, 30, 120)) if is_hidden else None
-    bar_label = "히든종목" if is_hidden else "종목 분석"
+    is_hidden  = sec.get("id", "").startswith("hidden_")
+    bar_color  = C.get("hidden_accent", (80, 30, 120)) if is_hidden else None
+    bar_label  = "숨은 종목" if is_hidden else "종목 분석"
     draw_topbar(draw, f"{bar_label}: {stock_name}", color=bar_color)
 
-    # 뉴스 이미지 — 우측 상단
     img_path = fetch_news_image(stock_name, img_dir, [])
     if img_path:
         paste_image(img, img_path, (W - 480, 84, W - 44, 400))
 
-    # 종목명
     cy = 100
     draw.text((MARGIN_X, cy), stock_name,
               font=fnt(72, bold=True), fill=C["white"])
@@ -231,7 +280,6 @@ def _build_stock_summary(sec, out_path, img_dir):
                                color=(180, 180, 210), line_gap=10)
         cy += 8
 
-    # 주가 + 등락률
     if price:
         draw.text((MARGIN_X, cy), f"₩ {price}",
                   font=fnt(56, bold=True), fill=C["gold"])
@@ -249,7 +297,6 @@ def _build_stock_summary(sec, out_path, img_dir):
     draw_divider(draw, cy)
     cy += 28
 
-    # 촉매 (좌) / 리스크 (우)
     half_w = (W - MARGIN_X * 2 - 60) // 2
     if catalysts:
         draw.text((MARGIN_X, cy), "투자 포인트",
@@ -273,37 +320,43 @@ def _build_stock_summary(sec, out_path, img_dir):
     return _save(img, out_path)
 
 
-# ── 종목 차트 화면 ────────────────────────────────────────────────────────
+# ── 종목 차트 슬라이드 ──────────────────────────────────────────────────────
 def _build_stock_chart(sec, out_path, img_dir):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
+    # ── [수정] subtitle_chart 필드 우선 사용, 없으면 narration_chart fallback ──
+    subtitle_text = sec.get("subtitle_chart", sec.get("narration_chart", ""))
+
     img  = new_frame()
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, f"최근 2주 차트: {stock_name}", color=(20, 55, 30))
 
     chart_path = build_chart_image(stock_name, img_dir)
     if chart_path:
-        # CHART_BOTTOM(H-200)으로 하단을 올려 자막과 겹치지 않게 함
+        # 차트는 topbar(74px) ~ CHART_BOTTOM(H-200) 영역에 배치
         _paste_fill(img, chart_path, (0, 74, W, CHART_BOTTOM))
     else:
         draw.text((CX, H // 2), f"{stock_name} 차트 데이터 없음",
                   font=fnt(40), fill=(120, 120, 140), anchor="mm")
 
+    # ── [수정] 자막 바 — 차트 아래 하단 바 바로 위에 배치 ──
+    _draw_subtitle_bar(draw, subtitle_text)
+
     draw_bottombar(draw, stock_name)
     return _save(img, out_path)
 
 
-# ── 전문가 멘션 화면 ──────────────────────────────────────────────────────
+# ── 언급 슬라이드 ───────────────────────────────────────────────────────────
 def _build_mention_page(sec, out_path, page_idx):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
     mentions   = sec.get("mentions", [])
     img  = new_frame()
     draw = ImageDraw.Draw(img)
-    draw_topbar(draw, f"전문가 멘션: {stock_name}", color=(40, 20, 60))
+    draw_topbar(draw, f"관련 언급: {stock_name}", color=(40, 20, 60))
 
     if not mentions:
         narration = sec.get("narration_mention",
-                    sec.get(f"narration_mention_{page_idx}",
-                    sec.get("narration", "")))
+                        sec.get(f"narration_mention_{page_idx}",
+                            sec.get("narration", "")))
         mentions = [{"source": "브리핑 요약", "reporter": "", "quote": narration}] \
                    if narration else []
 
@@ -365,7 +418,7 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
     return paths
 
 
-# ── AI 전략 ──────────────────────────────────────────────────────────────
+# ── AI 전략 ─────────────────────────────────────────────────────────────────
 def build_ai_strategy(data, out_dir):
     sec  = _find_section(data.get("sections", []), "ai_strategy")
     img  = new_frame()
@@ -373,14 +426,14 @@ def build_ai_strategy(data, out_dir):
     draw_topbar(draw, "AI 투자 전략", color=(40, 20, 70))
 
     cy = 100
-    draw.text((CX, cy), "AI 분석 종합 전략",
+    draw.text((CX, cy), "AI 전략 투자 제안",
               font=fnt(56, bold=True), fill=C["white"], anchor="mm")
     cy += 16
     draw.line([CX - 220, cy + 20, CX + 220, cy + 20], fill=C["gold"], width=3)
     cy += 56
 
     bullet_points = sec.get("bullet_points",
-                    sec.get("strategies", sec.get("items", [])))
+                        sec.get("strategies", sec.get("items", [])))
     card_h = 110
     for bp in bullet_points[:6]:
         if cy + card_h > Y_MAX:
@@ -409,7 +462,7 @@ def build_ai_strategy(data, out_dir):
     return _save(img, os.path.join(out_dir, "98_ai_strategy.png"))
 
 
-# ── 클로징 ───────────────────────────────────────────────────────────────
+# ── 클로징 ──────────────────────────────────────────────────────────────────
 def build_closing(data, out_dir):
     sec  = _find_section(data.get("sections", []), "closing")
     img  = new_frame()
@@ -423,14 +476,14 @@ def build_closing(data, out_dir):
     draw.text((CX, cy), "감사합니다",
               font=fnt(80, bold=True), fill=C["white"], anchor="mm")
     cy += 100
-    draw.text((CX, cy), "구독과 좋아요는 큰 힘이 됩니다",
+    draw.text((CX, cy), "성공적인 투자 되시길 바랍니다",
               font=fnt(40, bold=False), fill=C["gold"], anchor="mm")
     cy += 70
     draw.line([CX - 200, cy, CX + 200, cy], fill=C["gold"], width=2)
     cy += 30
 
     disclaimer = sec.get("disclaimer",
-                 "본 영상은 AI가 생성한 참고용 정보이며, 투자 권유가 아닙니다.")
+                         "본 영상은 AI를 통해 제작되었으며, 투자 결정은 직접 판단하시기 바랍니다.")
     for line in disclaimer.split("\\n"):
         if cy >= Y_MAX: break
         draw.text((CX, cy), line.strip(),
