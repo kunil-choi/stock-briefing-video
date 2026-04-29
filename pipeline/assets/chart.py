@@ -1,5 +1,68 @@
-# pipeline/assets/chart.py — draw_candle_chart() 함수만 교체
-# 변경 7: 주가 금액·날짜가 잘 보이도록 figsize 조정 + left margin 확대
+# pipeline/assets/chart.py
+import os
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import matplotlib.font_manager as fm
+from datetime import datetime, timedelta
+from typing import Optional
+from .config import C, STOCK_CODES, normalize_stock_name
+
+
+def _set_korean_font():
+    candidates = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJKkr-Regular.otf",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/Library/Fonts/NanumGothic.ttf",
+        "C:/Windows/Fonts/malgun.ttf",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            fm.fontManager.addfont(path)
+            prop = fm.FontProperties(fname=path)
+            matplotlib.rcParams["font.family"] = prop.get_name()
+            matplotlib.rcParams["axes.unicode_minus"] = False
+            return
+    matplotlib.rcParams["axes.unicode_minus"] = False
+
+_set_korean_font()
+
+
+def fetch_ohlcv(stock_name: str, days: int = 20) -> Optional[pd.DataFrame]:
+    normalized = normalize_stock_name(stock_name)
+    code = STOCK_CODES.get(normalized)
+    if not code:
+        print(f"  [chart] 종목코드 없음: {stock_name} (정규화: {normalized})")
+        return None
+    try:
+        from pykrx import stock as krx
+        end   = datetime.today().strftime("%Y%m%d")
+        start = (datetime.today() - timedelta(days=days * 3)).strftime("%Y%m%d")
+        df    = krx.get_market_ohlcv_by_date(start, end, code)
+        if df is None or df.empty:
+            print(f"  [chart] 데이터 없음: {stock_name}")
+            return None
+        df = df.tail(days)
+        df.index = pd.to_datetime(df.index)
+
+        col_map = {
+            "시가": "Open", "고가": "High", "저가": "Low",
+            "종가": "Close", "거래량": "Volume"
+        }
+        df = df.rename(columns=col_map)
+
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            if col not in df.columns:
+                print(f"  [chart] 컬럼 없음: {col}")
+                return None
+        return df
+    except Exception as e:
+        print(f"  [chart] pykrx 실패 ({stock_name}): {e}")
+        return None
+
 
 def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Optional[str]:
     try:
@@ -10,7 +73,7 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
         text_c = "#%02x%02x%02x" % C["chart_text"]
         gold_c = "#%02x%02x%02x" % C["gold"]
 
-        # ── 변경: figsize를 (17.0, 8.0)으로 줄여서 좌측 y축 레이블 공간 확보
+        # figsize를 (17.0, 8.0)으로 줄여서 좌측 y축 레이블 공간 확보
         fig, (ax_c, ax_v) = plt.subplots(
             2, 1,
             figsize=(17.0, 8.0),
@@ -28,10 +91,10 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
 
         # 캔들 몸통 + 심지
         for i, (_, row) in enumerate(df.iterrows()):
-            is_up   = row["Close"] >= row["Open"]
-            color   = up_col if is_up else dn_col
-            body_b  = min(row["Open"], row["Close"])
-            body_h  = abs(row["Close"] - row["Open"]) or (row["High"] * 0.001)
+            is_up  = row["Close"] >= row["Open"]
+            color  = up_col if is_up else dn_col
+            body_b = min(row["Open"], row["Close"])
+            body_h = abs(row["Close"] - row["Open"]) or (row["High"] * 0.001)
             ax_c.bar(i, body_h, bottom=body_b, color=color, width=0.6, zorder=3)
             ax_c.plot([i, i], [row["Low"], row["High"]],
                       color=color, linewidth=1.5, zorder=2)
@@ -55,24 +118,23 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
         ax_v.set_xticks(ticks)
         ax_v.set_xticklabels(labels, color=text_c, fontsize=14)
 
-        # ── 변경: y축 설정 — 폰트 크기 14, 오른쪽도 tick 없애기
+        # y축 설정 — labelsize 14, pad=10으로 잘림 방지
         ax_c.yaxis.set_visible(True)
         ax_c.yaxis.set_label_position("left")
         ax_c.yaxis.tick_left()
         ax_c.yaxis.set_major_formatter(
             mticker.FuncFormatter(lambda x, _: f"{int(x):,}")
         )
-        # ── 변경: labelsize 14 (더 크게), pad 늘려서 잘림 방지
         ax_c.tick_params(axis="y", colors=text_c, labelsize=14,
                          left=True, pad=10)
         ax_v.yaxis.set_visible(False)
 
         # 최고가·최저가 어노테이션
-        hi_i = df["High"].idxmax()
-        lo_i = df["Low"].idxmin()
+        hi_i     = df["High"].idxmax()
+        lo_i     = df["Low"].idxmin()
         idx_list = df.index.tolist()
-        hi_x = idx_list.index(hi_i)
-        lo_x = idx_list.index(lo_i)
+        hi_x     = idx_list.index(hi_i)
+        lo_x     = idx_list.index(lo_i)
 
         ax_c.annotate(
             f"▲ {int(df.loc[hi_i, 'High']):,}",
@@ -98,7 +160,7 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
         ax_c.set_xlim(-0.8, len(df) - 0.2)
         ax_v.set_xlim(-0.8, len(df) - 0.2)
 
-        # ── 변경: subplots_adjust로 좌측 여백 명시 확보 (y축 숫자 잘림 방지)
+        # 좌측 여백 명시 확보 (y축 숫자 잘림 방지)
         plt.subplots_adjust(left=0.10, right=0.97, top=0.97, bottom=0.08)
         plt.savefig(save_path, dpi=100, bbox_inches="tight", facecolor=bg)
         plt.close(fig)
@@ -109,3 +171,16 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
         print(f"  [chart] 차트 생성 실패 ({stock_name}): {e}")
         plt.close("all")
         return None
+
+
+def build_chart_image(stock_name: str, img_dir: str) -> Optional[str]:
+    normalized = normalize_stock_name(stock_name)
+    save_path  = os.path.join(img_dir, f"chart_{normalized}.png")
+    if os.path.exists(save_path):
+        print(f"  [chart] 캐시 사용: {normalized}")
+        return save_path
+    df = fetch_ohlcv(normalized, days=14)
+    if df is None or len(df) < 3:
+        print(f"  [chart] 데이터 부족: {normalized}")
+        return None
+    return draw_candle_chart(df, normalized, save_path)
