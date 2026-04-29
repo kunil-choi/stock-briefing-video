@@ -15,9 +15,8 @@ MARGIN_X = 80
 CX       = W // 2   # 중앙 정렬 x
 
 # 자막 영역 — 하단 바(52px) 바로 위, 차트와 겹치지 않는 위치
-# 차트는 상단 74px ~ H-200(CHART_BOTTOM)까지 차지
 CHART_BOTTOM  = H - 200
-SUBTITLE_H    = 72   # 자막 배경 높이 (2줄 여유)
+SUBTITLE_H    = 72
 SUBTITLE_Y    = H - 52 - SUBTITLE_H  # 하단 바 바로 위
 
 
@@ -66,22 +65,19 @@ def _draw_subtitle_bar(draw: ImageDraw.ImageDraw, text: str):
     차트 슬라이드 자막 바:
     - 위치: 하단 바(H-52) 바로 위 SUBTITLE_Y
     - 반투명 검정 배경 + 흰 글씨
-    - 폰트 크기: 34 (기존 화면 글씨보다 작게)
+    - 폰트 크기: 34px
     - 텍스트가 길면 두 줄로 줄바꿈
     """
     if not text:
         return
 
-    # 반투명 배경 오버레이 (알파 합성)
     overlay = Image.new("RGBA", (W, SUBTITLE_H), (0, 0, 0, 180))
-    base = draw._image  # 현재 이미지 참조
+    base = draw._image
     base_rgba = base.convert("RGBA")
     base_rgba.paste(overlay, (0, SUBTITLE_Y), overlay)
-    # RGB로 다시 변환해서 원본에 반영
     merged = Image.alpha_composite(base_rgba, Image.new("RGBA", base.size, (0, 0, 0, 0)))
     base.paste(merged.convert("RGB"))
 
-    # 텍스트 렌더링 — 최대 2줄, 폰트 34
     font = fnt(34, bold=True)
     max_w = W - MARGIN_X * 2
     line1 = ""
@@ -100,9 +96,7 @@ def _draw_subtitle_bar(draw: ImageDraw.ImageDraw, text: str):
         else:
             line1 = test
 
-    # 한 줄 또는 두 줄 중앙 정렬
     if line2:
-        # 두 줄: 세로 중앙 분배
         draw.text((CX, SUBTITLE_Y + 14), line1,
                   font=font, fill=C["white"], anchor="mt")
         draw.text((CX, SUBTITLE_Y + 14 + 38), line2,
@@ -323,7 +317,6 @@ def _build_stock_summary(sec, out_path, img_dir):
 # ── 종목 차트 슬라이드 ──────────────────────────────────────────────────────
 def _build_stock_chart(sec, out_path, img_dir):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    # ── [수정] subtitle_chart 필드 우선 사용, 없으면 narration_chart fallback ──
     subtitle_text = sec.get("subtitle_chart", sec.get("narration_chart", ""))
 
     img  = new_frame()
@@ -338,7 +331,6 @@ def _build_stock_chart(sec, out_path, img_dir):
         draw.text((CX, H // 2), f"{stock_name} 차트 데이터 없음",
                   font=fnt(40), fill=(120, 120, 140), anchor="mm")
 
-    # ── [수정] 자막 바 — 차트 아래 하단 바 바로 위에 배치 ──
     _draw_subtitle_bar(draw, subtitle_text)
 
     draw_bottombar(draw, stock_name)
@@ -347,26 +339,80 @@ def _build_stock_chart(sec, out_path, img_dir):
 
 # ── 언급 슬라이드 ───────────────────────────────────────────────────────────
 def _build_mention_page(sec, out_path, page_idx):
+    """
+    전문가 멘션 슬라이드.
+
+    JSON 구조 우선순위:
+      1) mentions 배열 (구조화된 데이터) — [{source, reporter, quote}, ...]
+      2) narration_mention_0/1 텍스트 (page_idx에 따라 분기)
+      3) narration_mention 텍스트 (단일 슬라이드)
+
+    각 카드에는 source(매체/증권사), reporter(애널리스트/기자), quote(언급 내용)를
+    표시하며, subtitle_mention/_0/_1이 있으면 하단 자막 바로 표시합니다.
+    """
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    mentions   = sec.get("mentions", [])
+
+    # ── 자막 텍스트 선택 (subtitle_mention_0/1 → subtitle_mention 순) ──
+    if page_idx == 0:
+        subtitle_text = sec.get("subtitle_mention_0",
+                           sec.get("subtitle_mention", ""))
+    elif page_idx == 1:
+        subtitle_text = sec.get("subtitle_mention_1",
+                           sec.get("subtitle_mention", ""))
+    else:
+        subtitle_text = sec.get("subtitle_mention", "")
+
+    # ── 멘션 카드 데이터 결정 ──
+    mentions = sec.get("mentions", [])
+
+    if mentions:
+        # 구조화된 배열이 있으면 페이지당 3개씩 슬라이싱
+        page_mentions = mentions[page_idx * 3: page_idx * 3 + 3]
+    else:
+        # narration_mention_0/1 또는 narration_mention 텍스트를 카드로 변환
+        if page_idx == 0:
+            narration_text = sec.get("narration_mention_0",
+                                sec.get("narration_mention", ""))
+        elif page_idx == 1:
+            narration_text = sec.get("narration_mention_1",
+                                sec.get("narration_mention", ""))
+        else:
+            narration_text = sec.get("narration_mention", "")
+
+        # 텍스트를 문단 단위로 쪼개어 카드 1~3장으로 분할
+        paragraphs = [p.strip() for p in narration_text.split("\n\n") if p.strip()]
+        if not paragraphs:
+            paragraphs = [narration_text] if narration_text else []
+
+        # 문단이 하나뿐이면 마침표 기준으로 최대 3개로 분할 시도
+        if len(paragraphs) == 1 and len(paragraphs[0]) > 120:
+            sentences = paragraphs[0].replace("。", ".").split(". ")
+            sentences = [s.strip() + ("." if not s.endswith(".") else "")
+                         for s in sentences if s.strip()]
+            chunk_size = max(1, len(sentences) // 3)
+            paragraphs = [
+                " ".join(sentences[i:i + chunk_size])
+                for i in range(0, len(sentences), chunk_size)
+            ][:3]
+
+        page_mentions = [
+            {"source": stock_name, "reporter": "", "quote": p}
+            for p in paragraphs[:3]
+        ]
+
+    # ── 슬라이드 렌더링 ──
     img  = new_frame()
     draw = ImageDraw.Draw(img)
-    draw_topbar(draw, f"관련 언급: {stock_name}", color=(40, 20, 60))
+    draw_topbar(draw, f"전문가 언급: {stock_name}", color=(40, 20, 60))
 
-    if not mentions:
-        narration = sec.get("narration_mention",
-                        sec.get(f"narration_mention_{page_idx}",
-                            sec.get("narration", "")))
-        mentions = [{"source": "브리핑 요약", "reporter": "", "quote": narration}] \
-                   if narration else []
-
-    cy = 96
-    page_mentions = mentions[page_idx * 3 : page_idx * 3 + 3]
-    n      = len(page_mentions)
-    card_h = min(260, (Y_MAX - cy - 20 * n) // max(n, 1))
+    cy    = 96
+    n     = len(page_mentions)
+    # 자막 바 공간(SUBTITLE_H + 하단 바) 확보
+    usable_bottom = SUBTITLE_Y if subtitle_text else Y_MAX
+    card_h = min(260, (usable_bottom - cy - 20 * max(n, 1)) // max(n, 1))
 
     for m in page_mentions:
-        if cy >= Y_MAX:
+        if cy >= usable_bottom:
             break
         if isinstance(m, str):
             m = {"source": "", "reporter": "", "quote": m}
@@ -377,7 +423,7 @@ def _build_mention_page(sec, out_path, page_idx):
         content  = m.get("quote",    m.get("report",
                          m.get("content", m.get("comment", ""))))
 
-        actual_h = min(card_h, Y_MAX - cy)
+        actual_h = min(card_h, usable_bottom - cy)
         draw.rounded_rectangle(
             [MARGIN_X, cy, W - MARGIN_X, cy + actual_h],
             radius=16, fill=C["card"])
@@ -395,6 +441,10 @@ def _build_mention_page(sec, out_path, page_idx):
                               size=30, color=C["white"], line_gap=12)
         cy += actual_h + 20
 
+    # ── 자막 바 렌더링 ──
+    if subtitle_text:
+        _draw_subtitle_bar(draw, subtitle_text)
+
     draw_bottombar(draw, stock_name)
     return _save(img, out_path)
 
@@ -407,7 +457,13 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
             sec, os.path.join(out_dir, f"{prefix}_2_chart.png"), img_dir),
     ]
     mentions = sec.get("mentions", [])
-    pages    = max(1, (len(mentions) + 2) // 3)
+    # mentions 배열이 없을 때는 narration_mention 계열 텍스트로 페이지 수 결정
+    if mentions:
+        pages = max(1, (len(mentions) + 2) // 3)
+    else:
+        has_0 = bool(sec.get("narration_mention_0") or sec.get("subtitle_mention_0"))
+        has_1 = bool(sec.get("narration_mention_1") or sec.get("subtitle_mention_1"))
+        pages = 2 if (has_0 and has_1) else 1
     for p in range(pages):
         paths.append(
             _build_mention_page(
