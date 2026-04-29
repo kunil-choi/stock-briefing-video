@@ -56,16 +56,52 @@ CLOSING_SUBTITLE = (
 
 
 def fetch_briefing():
+    """
+    브리핑 앱 텍스트 수집 + 요구 6: 종목별 차트 이미지를 Playwright로 캡처해 저장.
+    저장 경로: output/KO/images/briefing_chart_{종목명}.png
+    """
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page()
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
             page.goto(
                 "https://kunil-choi.github.io/stock-briefing-v2/",
                 wait_until="networkidle",
                 timeout=30000
             )
             text = page.inner_text("body")
+
+            # ── 차트 이미지 캡처 (요구 6) ─────────────────────────────────
+            # 브리핑 앱의 차트 링크는 "📈 차트보기" 텍스트를 가진 <a> 태그
+            # 또는 canvas/img 요소로 존재. 여기서는 차트 영역을 종목별로 스크린샷
+            img_dir = os.path.join(_HERE, "..", "output", "KO", "images")
+            os.makedirs(img_dir, exist_ok=True)
+
+            # 각 종목 섹션의 차트 영역을 스크린샷으로 캡처
+            # 브리핑 앱에서 "📈 주가 흐름" 섹션 바로 아래 차트가 있는 구조
+            stock_sections = page.query_selector_all("section.stock-item, div.stock-card, article")
+            if not stock_sections:
+                # 구조가 다를 경우 — 종목명과 차트 이미지 요소를 직접 탐색
+                chart_links = page.query_selector_all("a:has-text('차트보기')")
+                for link in chart_links:
+                    try:
+                        # 차트 링크 인근의 종목명 텍스트 추출
+                        parent = link.evaluate_handle("el => el.closest('section') || el.closest('div.stock') || el.parentElement.parentElement")
+                        heading = parent.query_selector("h3, h4, strong")
+                        if not heading:
+                            continue
+                        stock_name = heading.inner_text().strip().split("\n")[0]
+                        normalized = normalize_stock_name(stock_name)
+                        save_path  = os.path.join(img_dir, f"briefing_chart_{normalized}.png")
+                        if not os.path.exists(save_path):
+                            # 차트 영역 박스 스크린샷
+                            chart_area = parent.query_selector("canvas, img.chart, div.chart-container")
+                            if chart_area:
+                                chart_area.screenshot(path=save_path)
+                                print(f"  [briefing_chart] 캡처 완료: {normalized}")
+                    except Exception as ce:
+                        print(f"  [briefing_chart] 캡처 실패: {ce}")
+
             browser.close()
             return text
     except Exception as e:
@@ -85,68 +121,70 @@ def generate_script(briefing_text):
 
 ## ★ narration vs subtitle 핵심 차이 (반드시 준수)
 
-두 필드는 소리 내어 읽으면 동일하게 들리지만, 글자 표기 방식이 다릅니다.
-
-[narration — TTS 낭독용, 귀로 듣는 텍스트]
+[narration — TTS 낭독용]
 - 숫자를 반드시 한글로 풀어씁니다.
   · 6,700 → 육천칠백  /  133만 → 백삼십삼만  /  12조2400억 → 십이조 이천사백억
   · 85,400원 → 팔만오천사백원  /  +1.2% → 플러스 일점이퍼센트
-  · 숫자를 절대 아라비아 숫자로 남기지 않습니다.
 - 영문 약어를 한글 발음으로 읽습니다.
   · SK → 에스케이  /  LG → 엘지  /  KB → 케이비  /  ETF → 이티에프
   · AI → 에이아이  /  HBM → 에이치비엠  /  ESS → 이에스에스
-  · KOSPI → 코스피  /  KOSDAQ → 코스닥  (이 두 개는 발음 그대로)
-- 구어체로 자연스럽게 작성합니다. (~입니다, ~했습니다 등)
+  · KOSPI → 코스피  /  KOSDAQ → 코스닥
+- ★ 발음 교정 규칙 (요구 7):
+  · "유가"는 반드시 "유까"로 표기합니다.
+    예) "유가가 올랐다" → "유까가 올랐다" / "고유가" → "고유까" / "유가 급등" → "유까 급등"
+- 구어체로 자연스럽게 작성합니다.
 
-[subtitle — 화면 자막용, 눈으로 보는 텍스트]
-- 숫자는 아라비아 숫자 원형 그대로 유지합니다.
-  · 6,700  /  133만원  /  12조 2,400억  /  +1.2%
-- 영문 약어는 원래 표기 그대로 유지합니다.
-  · SK하이닉스  /  LG전자  /  KB금융  /  ETF  /  AI  /  HBM
-- 구어체 조사나 표현을 문어체로 바꿉니다.
-  · narration: "에스케이하이닉스의 현재 주가는 백삼십삼만원으로..."
-  · subtitle:  "SK하이닉스의 현재 주가는 133만원으로..."
+[subtitle — 화면 자막용]
+- 숫자는 아라비아 숫자 원형 그대로.
+- 영문 약어는 원래 표기 그대로.
+- "유가"는 자막에서는 "유가" 그대로 표기합니다. (발음 교정은 narration 전용)
+
+## ★ 코너 오프닝 멘트 규칙 (요구 2 — 필수)
+각 섹션의 narration 첫 문장에는 반드시 해당 코너를 소개하는 오프닝 멘트를 포함합니다.
+
+- market_summary: "먼저 오늘의 주식시장 요약입니다."로 시작
+- sectors: "오늘 주목할 업종을 살펴보겠습니다."로 시작
+- stock_XXX (첫 번째 종목의 summary): "지금부터 관심 종목 분석입니다."로 시작
+  이후 종목들의 summary: "다음은 [종목명] 분석입니다."로 시작
+- hidden_XXX (첫 번째 히든 종목의 summary): "이번에는 숨은 종목을 소개해 드립니다."로 시작
+  이후 히든 종목들의 summary: "다음 숨은 종목은 [종목명]입니다."로 시작
+- chart 슬라이드: "최근 이주간 주가 차트를 보면,"으로 시작
+- mention 슬라이드 (첫 번째, page_idx==0): "각 채널에서 언급한 내용을 보겠습니다."로 시작
+  이후 mention 슬라이드 (page_idx>=1): "이어서 추가 언급 내용입니다."로 시작
+- ai_strategy: "에이아이가 제안하는 오늘의 투자 전략입니다."로 시작
+
+subtitle도 동일한 오프닝 문장으로 시작하되 narration 표기 규칙을 적용합니다.
+(예: narration "에이아이가 제안하는" → subtitle "AI가 제안하는")
+
+## ★ mention 채널명 낭독 규칙 (요구 5 — 필수)
+mention 슬라이드의 narration_mention(_0/_1/_2)을 작성할 때:
+- 각 언급 항목을 소개할 때 반드시 채널명 또는 매체명을 먼저 읽고 내용을 낭독합니다.
+- 발화자(speaker)가 확인된 경우: "[채널명]의 [발화자명]은, [내용]"
+- 발화자가 없는 경우: "[채널명]에서는, [내용]"
+- 예시:
+  · "서울경제에서는, 자사주 십이조 이천사백억원 소각으로 밸류업지수 상승을 주도했다고 전했습니다."
+  · "한국경제티비의 노근창 센터장은, 이천이십팔년까지 반도체 슈퍼사이클이 지속된다고 강력히 긍정했습니다."
 
 ## 종목 섹션 구성 (필수)
-- AI 브리핑의 관심 종목(stock_)과 히든 종목(hidden_) 모두를 브리핑 원문에 등장하는 순서 그대로 처리합니다.
-- 각 종목마다 아래 슬라이드 3종을 반드시 작성합니다:
-  1) summary 슬라이드: 주가·시총·사업 소개·실적·투자포인트 중심
-  2) chart 슬라이드: 최근 2주 주가 흐름·분기 실적·핵심 이슈 중심
-  3) mention 슬라이드(들): 채널별 언급 내용 — 아래 별도 규칙 참고
+- 관심 종목(stock_)과 히든 종목(hidden_) 모두를 브리핑 원문 등장 순서 그대로 처리합니다.
+- 각 종목마다 summary / chart / mention 슬라이드 3종 필수 작성.
 
-## ★ mention(채널별 언급) 슬라이드 규칙 (필수)
+## mention 슬라이드 분할 규칙 (필수)
+- 언급 1~3개: 단일 슬라이드 (narration_mention / subtitle_mention)
+- 언급 4~6개: 2슬라이드 (narration_mention_0/_1 / subtitle_mention_0/_1)
+- 언급 7~9개: 3슬라이드 (_0/_1/_2)
+- 각 슬라이드 최대 3개 언급, 페이지별 narration은 해당 페이지 내용만 포함.
 
-AI 브리핑의 "채널별 언급 내용" 항목을 그대로 사용합니다.
-
-[슬라이드 분할 규칙]
-- 언급 1~3개: mention 슬라이드 1장  (mention 배열에 최대 3개 항목)
-- 언급 4~6개: mention 슬라이드 2장  (0번 슬라이드: 1~3번째, 1번 슬라이드: 4~6번째)
-- 언급 7~9개: mention 슬라이드 3장  (0번: 1~3, 1번: 4~6, 2번: 7~9)
-- 각 슬라이드에는 정확히 최대 3개의 언급 항목이 들어갑니다.
-
-[mention 항목 구조]
-각 언급 항목을 아래 형식으로 작성합니다:
+## mention 항목 구조
 {{
   "speaker": "발화자 이름 (확인된 경우만, 불명확하면 빈 문자열)",
   "channel": "채널명 또는 매체명",
-  "quote_narration": "낭독용 텍스트 — 숫자 한글, 영문 한글 발음",
-  "quote_subtitle": "자막용 텍스트 — 숫자·영문 원형 유지"
+  "quote_narration": "낭독용 (숫자 한글, 영문 한글 발음, 유가→유까)",
+  "quote_subtitle": "자막용 (숫자·영문 원형, 유가 그대로)"
 }}
 
-[발화자 표시 규칙]
-- AI 브리핑 원문에 이름이 명시된 경우만 speaker 필드에 기입합니다.
-  예: "현대차증권 노근창 센터장" → speaker: "노근창 센터장", channel: "현대차증권"
-- 원문에 발화자가 없고 채널명만 있는 경우 → speaker: "", channel: "채널명"
-
-[mention narration 작성 규칙]
-- narration_mention (1장짜리, 또는 0번 슬라이드): 해당 슬라이드에 담긴 1~3개 언급 내용 전체를 자연스럽게 이어 읽는 문장
-- narration_mention_0, narration_mention_1 ... : 각 슬라이드 페이지에 담긴 내용만 포함
-- 각 슬라이드의 narration은 그 슬라이드에 표시되는 언급 내용과 1:1로 대응합니다.
-
 ## 기타 섹션 규칙
-- market_summary: narration/subtitle 각각 작성. kospi_value는 화면 표시용 숫자 그대로("6,700")
-- sectors: narration/subtitle 각각
-- ai_strategy: narration/subtitle 각각
+- market_summary: kospi_value는 화면 표시용 숫자 그대로("6,700")
 - opening/closing: "__OPENING__" / "__OPENING_SUBTITLE__" / "__CLOSING__" / "__CLOSING_SUBTITLE__" 플레이스홀더 사용
 
 ## 최종 JSON 구조
@@ -164,8 +202,8 @@ AI 브리핑의 "채널별 언급 내용" 항목을 그대로 사용합니다.
     {{
       "id": "market_summary",
       "label": "시장 요약",
-      "narration": "[TTS용 — 지수 육천칠백, 등락 한글]",
-      "subtitle": "[자막용 — 지수 6,700, 등락 원형]",
+      "narration": "먼저 오늘의 주식시장 요약입니다. [이하 TTS용 내용]",
+      "subtitle": "먼저 오늘의 주식시장 요약입니다. [이하 자막용 내용]",
       "kospi_value": "6,700",
       "kospi_change": "+1.2%",
       "kospi_change_positive": true,
@@ -174,8 +212,8 @@ AI 브리핑의 "채널별 언급 내용" 항목을 그대로 사용합니다.
     {{
       "id": "sectors",
       "label": "업종 분석",
-      "narration": "[TTS용]",
-      "subtitle": "[자막용]",
+      "narration": "오늘 주목할 업종을 살펴보겠습니다. [이하 TTS용]",
+      "subtitle": "오늘 주목할 업종을 살펴보겠습니다. [이하 자막용]",
       "sector_list": [{{"name": "섹터명", "desc": "설명"}}]
     }},
     {{
@@ -183,10 +221,16 @@ AI 브리핑의 "채널별 언급 내용" 항목을 그대로 사용합니다.
       "label": "종목 분석 - 종목명",
       "narration": "[narration_summary와 동일]",
       "subtitle": "[subtitle_summary와 동일]",
-      "narration_summary": "[TTS용 — 숫자 한글, 영문 한글 발음]",
-      "subtitle_summary": "[자막용 — 숫자·영문 원형]",
-      "narration_chart": "[TTS용]",
-      "subtitle_chart": "[자막용]",
+      "narration_summary": "지금부터 관심 종목 분석입니다. [또는 다음은 X 분석입니다.] [TTS용]",
+      "subtitle_summary": "지금부터 관심 종목 분석입니다. [자막용]",
+      "narration_chart": "최근 이주간 주가 차트를 보면, [TTS용]",
+      "subtitle_chart": "최근 2주간 주가 차트를 보면, [자막용]",
+      "narration_mention": "각 채널에서 언급한 내용을 보겠습니다. [채널명]에서는, [내용]. [채널명2]의 [발화자]는, [내용2].",
+      "subtitle_mention": "각 채널에서 언급한 내용을 보겠습니다. [자막용]",
+      "narration_mention_0": "각 채널에서 언급한 내용을 보겠습니다. [1~3번째 언급, 채널명 포함]",
+      "subtitle_mention_0": "[자막용]",
+      "narration_mention_1": "이어서 추가 언급 내용입니다. [4~6번째 언급, 채널명 포함]",
+      "subtitle_mention_1": "[자막용]",
       "price": "000,000",
       "change": "+0.00%",
       "change_positive": true,
@@ -195,24 +239,18 @@ AI 브리핑의 "채널별 언급 내용" 항목을 그대로 사용합니다.
       "risks": ["리스크1", "리스크2"],
       "mentions": [
         {{
-          "speaker": "발화자명 (확인된 경우만, 없으면 빈 문자열)",
+          "speaker": "발화자명 (확인된 경우만)",
           "channel": "채널명",
-          "quote_narration": "[TTS용 언급 내용]",
-          "quote_subtitle": "[자막용 언급 내용]"
+          "quote_narration": "[TTS용, 채널명 포함 문장]",
+          "quote_subtitle": "[자막용]"
         }}
-      ],
-      "narration_mention": "[언급 1~3개짜리 단일 슬라이드 전체 narration]",
-      "subtitle_mention": "[위 narration의 subtitle 버전]",
-      "narration_mention_0": "[4개 이상일 때 0번 슬라이드 narration — 1~3번째 언급]",
-      "subtitle_mention_0": "[위 narration의 subtitle 버전]",
-      "narration_mention_1": "[1번 슬라이드 narration — 4~6번째 언급]",
-      "subtitle_mention_1": "[위 narration의 subtitle 버전]"
+      ]
     }},
     {{
       "id": "ai_strategy",
       "label": "AI 투자 전략",
-      "narration": "[TTS용]",
-      "subtitle": "[자막용]",
+      "narration": "에이아이가 제안하는 오늘의 투자 전략입니다. [TTS용]",
+      "subtitle": "AI가 제안하는 오늘의 투자 전략입니다. [자막용]",
       "bullet_points": ["전략1", "전략2"]
     }},
     {{
