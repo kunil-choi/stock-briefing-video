@@ -75,3 +75,22 @@ jobs:
           name: generated-video-${{ github.run_number }}
           path: output/KO/video/final.mp4
           retention-days: 30
+          
+      - name: 📋 관리자 서버에 영상 등록
+        continue-on-error: true
+        env:
+          ADMIN_BASE_URL: ${{ secrets.ADMIN_BASE_URL }}
+          INTERNAL_API_TOKEN: ${{ secrets.INTERNAL_API_TOKEN }}
+          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+        run: |
+          if [ -z "$ADMIN_BASE_URL" ]; then
+            echo "⚠️ ADMIN_BASE_URL 미설정, 건너뜀"
+            exit 0
+          fi
+          TODAY=$(date -u +"%Y-%m-%d")
+          curl -s -X POST \
+            -H "X-Internal-Token: $INTERNAL_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\":\"${TODAY}\",\"title\":\"${TODAY} AI 증권 브리핑\",\"voice_id_used\":\"${ELEVENLABS_VOICE_ID}\"}" \
+            "$ADMIN_BASE_URL/internal/videos" && echo "✅ 등록 완료" || echo "⚠️ 등록 실패 (파이프라인 영향 없음)"
+
