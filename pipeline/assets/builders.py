@@ -1,5 +1,6 @@
 # pipeline/assets/builders.py
 import os
+import re
 from PIL import Image, ImageDraw
 from .config import W, H, C
 from .drawing import (
@@ -57,7 +58,6 @@ def _paste_fill(img: Image.Image, path: str, box: tuple):
 
 
 # ── 오프닝 ─────────────────────────────────────────────────────────────────
-# 변경 3: 브랜드명 "머니올라 AI 주식 브리핑", 키워드 중앙정렬 + 2배 크기
 def build_opening(data, out_dir):
     sec      = _find_section(data.get("sections", []), "opening")
     img      = new_frame()
@@ -70,8 +70,6 @@ def build_opening(data, out_dir):
         alpha = int(15 * (1 - i / H))
         draw.line([0, i, W, i], fill=(30 + alpha, 32 + alpha, 80 + alpha))
 
-    # ── 변경: 큰 제목을 "머니올라 AI 주식 브리핑" 으로 2줄 분리
-    #    "머니올라"는 골드, "AI 주식 브리핑"은 화이트
     cy = H // 2 - 200
 
     # 줄 1: "머니올라"
@@ -94,12 +92,11 @@ def build_opening(data, out_dir):
     draw.line([CX - 300, cy, CX + 300, cy], fill=C["gold"], width=3)
     cy += 52
 
-    # ── 변경: 키워드를 중앙 정렬 + 폰트 크기 2배(52px), 배지 대신 텍스트로 표시
+    # 키워드 중앙 정렬
     if keywords:
         kw_list = keywords[:4]
-        # 각 키워드 너비 계산 후 전체 너비 측정
         font_kw  = fnt(52, bold=False)
-        sep      = "    "   # 구분 공백
+        sep      = "    "
         sep_w    = int(draw.textlength(sep, font=font_kw))
 
         kw_widths = []
@@ -224,10 +221,6 @@ def build_sector(data, out_dir):
 
 
 # ── 종목 요약 슬라이드 ──────────────────────────────────────────────────────
-# 변경 6: 레이아웃 전면 개편
-#   - 종목명: 좌상단 고정 (MARGIN_X, 90)
-#   - 줄간격 대폭 확대 (시원시원한 편집)
-#   - 투자 포인트 & 리스크: 화면 중간(cy ≈ H//2 - 60) 부터 시작
 def _build_stock_summary(sec, out_path, img_dir):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
     price      = sec.get("price", "")
@@ -245,26 +238,26 @@ def _build_stock_summary(sec, out_path, img_dir):
     bar_label = "숨은 종목" if is_hidden else "종목 분석"
     draw_topbar(draw, f"{bar_label}: {stock_name}", color=bar_color)
 
-    # 뉴스 이미지 — 우측 상단 (더 작게)
+    # 뉴스 이미지 — 우측 상단
     img_path = fetch_news_image(stock_name, img_dir, [])
     if img_path:
         paste_image(img, img_path, (W - 360, 84, W - 60, 320))
 
-    # ── 좌상단: 종목명 ────────────────────────────────────────────────────
+    # 좌상단: 종목명
     NAME_Y = 90
     draw.text((MARGIN_X, NAME_Y), stock_name,
               font=fnt(80, bold=True), fill=C["white"])
 
-    # ── 종목명 아래 한줄 요약 ─────────────────────────────────────────────
+    # 종목명 아래 한줄 요약
     SUMMARY_Y = NAME_Y + 100
     if summary:
         draw_wrapped_text(draw, summary,
                           MARGIN_X, SUMMARY_Y,
-                          W - 460,          # 이미지 영역 피하기
+                          W - 460,
                           size=32, bold=False,
                           color=(180, 180, 210), line_gap=14)
 
-    # ── 주가 + 등락률 ─────────────────────────────────────────────────────
+    # 주가 + 등락률
     PRICE_Y = SUMMARY_Y + 90
     if price:
         draw.text((MARGIN_X, PRICE_Y), f"₩ {price}",
@@ -279,11 +272,11 @@ def _build_stock_summary(sec, out_path, img_dir):
             draw.text((px, PRICE_Y + 12), change,
                       font=fnt(44, bold=True), fill=change_color)
 
-    # ── 구분선 ───────────────────────────────────────────────────────────
+    # 구분선
     DIVIDER_Y = H // 2 - 30
     draw_divider(draw, DIVIDER_Y)
 
-    # ── 투자 포인트 & 리스크: 화면 중간부터 시작 ─────────────────────────
+    # 투자 포인트 & 리스크
     CARD_START_Y = DIVIDER_Y + 36
     half_w = (W - MARGIN_X * 2 - 80) // 2
 
@@ -340,7 +333,6 @@ def _build_stock_chart(sec, out_path, img_dir):
 
 
 # ── 언급 슬라이드 ───────────────────────────────────────────────────────────
-# 변경 1: quote_subtitle (문어체 요약) 사용 — 구어체 narration 미사용
 def _build_mention_page(sec, out_path, page_idx):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
     mentions   = sec.get("mentions", [])
@@ -348,7 +340,6 @@ def _build_mention_page(sec, out_path, page_idx):
     if mentions:
         page_mentions = mentions[page_idx * 3: page_idx * 3 + 3]
     else:
-        # mentions 배열 없을 때 — subtitle_mention 계열 필드 사용 (문어체)
         if page_idx == 0:
             raw = sec.get("subtitle_mention_0", sec.get("subtitle_mention", ""))
         elif page_idx == 1:
@@ -390,10 +381,9 @@ def _build_mention_page(sec, out_path, page_idx):
 
         speaker = m.get("speaker", "").strip()
         channel = m.get("channel", m.get("source", "")).strip()
-        # 헤더: "채널명 | 발화자" 또는 "채널명" 만
         header  = f"{channel} | {speaker}" if speaker else channel
 
-        # ★ 화면 그래픽에는 quote_subtitle (문어체 요약) 사용
+        # 화면 그래픽에는 quote_subtitle (문어체 요약) 사용
         content = m.get("quote_subtitle",
                    m.get("quote", m.get("content", "")))
 
@@ -418,13 +408,18 @@ def _build_mention_page(sec, out_path, page_idx):
     return _save(img, out_path)
 
 
+# ── 수정 5: mention 중복 프레임 방지 ─────────────────────────────────────────
 def build_stock_cards(sec, out_dir, img_dir, prefix):
+    generated_paths = set()
+
+    summary_path = os.path.join(out_dir, f"{prefix}_1_summary.png")
+    chart_path   = os.path.join(out_dir, f"{prefix}_2_chart.png")
+
     paths = [
-        _build_stock_summary(
-            sec, os.path.join(out_dir, f"{prefix}_1_summary.png"), img_dir),
-        _build_stock_chart(
-            sec, os.path.join(out_dir, f"{prefix}_2_chart.png"), img_dir),
+        _build_stock_summary(sec, summary_path, img_dir),
+        _build_stock_chart(sec, chart_path, img_dir),
     ]
+    generated_paths.update([summary_path, chart_path])
 
     mentions = sec.get("mentions", [])
     if mentions:
@@ -436,11 +431,13 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
         pages = 3 if has_2 else (2 if has_1 else 1)
 
     for p in range(pages):
+        mention_path = os.path.join(out_dir, f"{prefix}_3_mention_{p:02d}.png")
+        if mention_path in generated_paths:
+            print(f"  ⚠️ 중복 프레임 건너뜀: {os.path.basename(mention_path)}")
+            continue
+        generated_paths.add(mention_path)
         paths.append(
-            _build_mention_page(
-                sec,
-                os.path.join(out_dir, f"{prefix}_3_mention_{p:02d}.png"),
-                p)
+            _build_mention_page(sec, mention_path, p)
         )
     return paths
 
