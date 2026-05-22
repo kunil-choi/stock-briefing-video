@@ -6,9 +6,9 @@ import re
 import subprocess
 import urllib.request
 
-# ── BGM 볼륨: 기존 0.20의 60% = 0.12 ─────────────────────────────────────
+# ── BGM 볼륨: 기존 0.12에서 추가 30% 감소 (0.12 × 0.7 = 0.084) ────────────
 BGM_URL    = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
-BGM_VOLUME = 0.12   # 요구 3: 음악 음량 60% 수준으로 낮춤
+BGM_VOLUME = 0.084  # 수정 3: 배경음악 30% 추가 감소
 
 
 # ── BGM ──────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ def build_section_video(
     """
     PNG + MP3 → MP4 변환.
     자막은 builders.py가 PNG에 이미 그려 넣었으므로
-    ffmpeg에서 별도 SRT 자막을 추가하지 않습니다. (요구 1)
+    ffmpeg에서 별도 SRT 자막을 추가하지 않습니다.
     """
     duration = get_audio_duration(mp3_path)
 
@@ -219,7 +219,6 @@ def run(lang: str = "KO"):
             mp3_path = _make_silent_audio(video_dir, frame_stem)
 
         out_video = os.path.join(video_dir, f"{frame_stem}.mp4")
-        # 자막은 PNG에 내장됨 — subtitle 인자 제거 (요구 1)
         ok = build_section_video(frame_path, mp3_path, out_video)
         if ok:
             section_videos.append(out_video)
