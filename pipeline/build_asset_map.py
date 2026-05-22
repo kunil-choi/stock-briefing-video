@@ -26,8 +26,19 @@ else:
         shutil.copy2(src, dst)
     print(f"✅ {len(all_pngs)}개 PNG → {FRAMES_DIR} 복사 완료")
 
-# frames 디렉토리 기준으로 최종 목록 생성
-frames = sorted(glob.glob(os.path.join(FRAMES_DIR, "*.png")))
+# frames 디렉토리 기준으로 최종 목록 생성 (정렬)
+frames_raw = sorted(glob.glob(os.path.join(FRAMES_DIR, "*.png")))
+
+# ── 수정 5: 중복 파일명 제거 ──────────────────────────────────────────────
+seen_basenames = set()
+frames = []
+for f in frames_raw:
+    basename = os.path.basename(f)
+    if basename not in seen_basenames:
+        seen_basenames.add(basename)
+        frames.append(f)
+    else:
+        print(f"  ⚠️ 중복 프레임 제거됨: {basename}")
 
 asset_map = {"frames": frames, "lang": "KO"}
 out_path = "output/KO/asset_map.json"
