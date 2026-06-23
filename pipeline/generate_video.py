@@ -91,11 +91,12 @@ def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
         return f"{sid}_mention_{page_num}"
 
     # mention 단일: NN_종목명_3_mention
+    # builders.py는 항상 _3_mention_{p:02d}.png 형식 사용로 이 패턴은 실제 도달 불가, 방어적으로 _mention_00 반환
     m = re.match(r'^\d{2}_(.+)_3_mention$', stem)
     if m:
         stock_name = m.group(1)
         sid = _find_stock_section_id(stock_name, sections)
-        return f"{sid}_mention"
+        return f"{sid}_mention_00"
 
     # chart: NN_종목명_2_chart
     m = re.match(r'^\d{2}_(.+)_2_chart$', stem)

@@ -124,11 +124,13 @@ def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
         return f"{sid}_mention_{page_num}"
 
     # mention 단일 페이지: NN_종목명_3_mention
+    # builders.py는 항상 _3_mention_{p:02d}.png 형식으로 생성하므로
+    # 이 패턴은 실제로 도달 불가능하나, 방어적으로 _mention_00 반환
     m = re.match(r'^\d{2}_(.+)_3_mention$', stem)
     if m:
         stock_name = m.group(1)
         sid = _find_stock_section_id(stock_name, sections)
-        return f"{sid}_mention"
+        return f"{sid}_mention_00"
 
     # chart: NN_종목명_2_chart
     m = re.match(r'^\d{2}_(.+)_2_chart$', stem)
@@ -181,8 +183,8 @@ def _build_subtitle_map(sections: list, lang: str) -> dict:
         'sectors': '자막텍스트',
         'stock_삼성전자_summary': '자막텍스트',
         'stock_삼성전자_chart': '자막텍스트',
-        'stock_삼성전자_mention': '자막텍스트',
-        'stock_삼성전자_mention_00': '자막텍스트',
+        'stock_삼성전자_mention_00': '자막텍스트',   # 항상 숫자 포함 (builders와 통일)
+        'stock_삼성전자_mention_01': '자막텍스트',
         'ai_strategy': '자막텍스트',
         'closing': '자막텍스트',
     }
@@ -212,34 +214,32 @@ def _build_subtitle_map(sections: list, lang: str) -> dict:
             mentions   = section.get("mentions", [])
             n_mentions = len(mentions)
 
+            # builders.py는 항상 _3_mention_{p:02d}.png 형식 사용 (단일도 _mention_00)
+            # voice.py도 동일하게 항상 _mention_{p:02d}.mp3 형식
+            # → subtitle_map 키도 항상 _mention_{p:02d} 형식으로 통일
             if n_mentions > 0:
                 pages = max(1, (n_mentions + 2) // 3)
-                if pages == 1:
-                    sub = section.get("subtitle_mention", "")
-                    if not sub and mentions:
+                for p in range(pages):
+                    sub = section.get(f"subtitle_mention_{p}", "")
+                    if not sub and pages == 1:
+                        # 단일 페이지: subtitle_mention 필드도 허용
+                        sub = section.get("subtitle_mention", "")
+                    if not sub:
+                        page_items = mentions[p * 3: p * 3 + 3]
                         sub = " | ".join(
-                            m.get("quote_subtitle", "") for m in mentions[:3]
+                            m.get("quote_subtitle", "") for m in page_items
                             if m.get("quote_subtitle", "")
                         )
                     if sub:
-                        subtitle_map[f"{sid}_mention"] = sub
-                else:
-                    for p in range(pages):
-                        sub = section.get(f"subtitle_mention_{p}", "")
-                        if not sub:
-                            page_items = mentions[p * 3: p * 3 + 3]
-                            sub = " | ".join(
-                                m.get("quote_subtitle", "") for m in page_items
-                                if m.get("quote_subtitle", "")
-                            )
-                        if sub:
-                            subtitle_map[f"{sid}_mention_{p:02d}"] = sub
+                        subtitle_map[f"{sid}_mention_{p:02d}"] = sub
             else:
-                # 혹시 narration_mention 필드가 직접 있는 경우
-                for suffix in ["_mention", "_mention_00", "_mention_01", "_mention_02"]:
-                    sub = section.get(f"subtitle{suffix}", "")
+                # mentions 배열 없는 경우: subtitle_mention_N 직접 필드
+                text_0 = section.get("subtitle_mention_0", section.get("subtitle_mention", ""))
+                text_1 = section.get("subtitle_mention_1", "")
+                text_2 = section.get("subtitle_mention_2", "")
+                for p, sub in enumerate([text_0, text_1, text_2]):
                     if sub:
-                        subtitle_map[f"{sid}{suffix}"] = sub
+                        subtitle_map[f"{sid}_mention_{p:02d}"] = sub
 
         else:
             # 일반 섹션
