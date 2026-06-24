@@ -4,6 +4,17 @@ pipeline/generate_video.py
 KBS 머니올라 — 동영상 합성 모듈
 PNG 프레임 + MP3 오디오 + ASS 자막 → MP4
 
+프레임 → 오디오 매핑 규칙:
+  00_opening.png             → opening.mp3
+  01_market_00.png           → market_summary.mp3
+  02_sector.png              → sectors.mp3
+  NN_종목명_1_summary.png    → stock_종목명_summary.mp3
+  NN_종목명_2_chart.png      → stock_종목명_chart.mp3
+  NN_종목명_3_mention.png    → stock_종목명_mention.mp3
+  NN_종목명_3_mention_MM.png → stock_종목명_mention_MM.mp3
+  98_ai_strategy.png         → ai_strategy.mp3
+  99_closing.png             → closing.mp3
+
 자막 처리:
   - ASS burn-in 방식: ffmpeg libass 필터로 자막을 영상에 직접 합성
   - 나레이션 타이밍과 동기화된 하단 자막 표출
@@ -46,9 +57,77 @@ def get_audio_duration(mp3_path: str) -> float:
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
-        return float(result.stdout.strip())
+        dur = float(result.stdout.strip())
+        return dur if dur > 0 else 3.0
     except Exception:
         return 3.0
+
+
+# ── 프레임 스템 → 오디오 ID 변환 ─────────────────────────────────────────
+
+def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
+    """
+    프레임 파일 스템(확장자 없는 파일명)을 오디오 ID로 변환합니다.
+    generate_subtitles.py 와 동일한 로직을 사용합니다.
+    """
+    # 고정 패턴
+    fixed_patterns = [
+        (r'^00_opening$',    'opening'),
+        (r'^01_market',      'market_summary'),
+        (r'^02_sector',      'sectors'),
+        (r'^98_ai_strategy', 'ai_strategy'),
+        (r'^99_closing',     'closing'),
+    ]
+    for pattern, audio_id in fixed_patterns:
+        if re.match(pattern, stem):
+            return audio_id
+
+    # mention 페이지 있음: NN_종목명_3_mention_MM
+    m = re.match(r'^\d{2}_(.+)_3_mention_(\d{2})$', stem)
+    if m:
+        stock_name = m.group(1)
+        page_num   = m.group(2)
+        sid = _find_stock_section_id(stock_name, sections)
+        return f"{sid}_mention_{page_num}"
+
+    # mention 단일: NN_종목명_3_mention
+    # builders.py는 항상 _3_mention_{p:02d}.png 형식 사용로 이 패턴은 실제 도달 불가, 방어적으로 _mention_00 반환
+    m = re.match(r'^\d{2}_(.+)_3_mention$', stem)
+    if m:
+        stock_name = m.group(1)
+        sid = _find_stock_section_id(stock_name, sections)
+        return f"{sid}_mention_00"
+
+    # chart: NN_종목명_2_chart
+    m = re.match(r'^\d{2}_(.+)_2_chart$', stem)
+    if m:
+        stock_name = m.group(1)
+        sid = _find_stock_section_id(stock_name, sections)
+        return f"{sid}_chart"
+
+    # summary: NN_종목명_1_summary
+    m = re.match(r'^\d{2}_(.+)_1_summary$', stem)
+    if m:
+        stock_name = m.group(1)
+        sid = _find_stock_section_id(stock_name, sections)
+        return f"{sid}_summary"
+
+    # fallback
+    print(f"  ⚠️ 오디오 ID 매핑 실패 — 스템: {stem}")
+    return stem
+
+
+def _find_stock_section_id(stock_name: str, sections: list) -> str:
+    """종목명으로 sections에서 실제 section ID를 찾습니다."""
+    for sec in sections:
+        sid = sec.get("id", "")
+        if sid in (f"stock_{stock_name}", f"hidden_{stock_name}"):
+            return sid
+    for sec in sections:
+        sid = sec.get("id", "")
+        if stock_name in sid:
+            return sid
+    return f"stock_{stock_name}"
 
 
 # ── 섹션 영상 생성 (PNG + MP3 → MP4) ─────────────────────────────────────
@@ -111,10 +190,10 @@ def burn_subtitles(video_path: str, ass_path: str, out_path: str) -> bool:
     자막이 나레이션 타이밍에 맞춰 화면 하단에 표출됩니다.
     """
     if not os.path.isfile(ass_path):
-        print(f"  ⚠️ ASS 자막 파일 없음 → 자막 없이 진행: {ass_path}")
+        print(f"  ⚠️ ASS 자막 파일 없음: {ass_path}")
         return False
 
-    # ASS 경로에서 특수문자 이스케이프 (libass 요구사항)
+    # ASS 경로 이스케이프 (libass 요구사항)
     ass_escaped = ass_path.replace("\\", "/").replace(":", "\\:")
 
     cmd = [
@@ -179,53 +258,6 @@ def _make_silent_audio(tmp_dir: str, name: str, duration: float = 3.0) -> str:
     return path
 
 
-# ── 오디오 ID 결정 ────────────────────────────────────────────────────────
-
-def _resolve_audio_id(frame_stem: str, sections: list) -> str:
-    fixed = {
-        "opening":     "opening",
-        "market":      "market_summary",
-        "sector":      "sectors",
-        "ai_strategy": "ai_strategy",
-        "closing":     "closing",
-    }
-    for key, sid in fixed.items():
-        if key in frame_stem:
-            return sid
-
-    suffix_map = {
-        "_1_summary": "_summary",
-        "_2_chart":   "_chart",
-        "_3_mention": "_mention",
-    }
-    for sec in sections:
-        sid  = sec.get("id", "")
-        if not (sid.startswith("stock_") or sid.startswith("hidden_")):
-            continue
-        name = sid.replace("stock_", "").replace("hidden_", "")
-        if not name:
-            continue
-        if not (frame_stem.startswith(name + "_") or
-                f"_{name}_" in frame_stem or
-                frame_stem == name):
-            continue
-
-        for fsuffix, asuffix in suffix_map.items():
-            if fsuffix in frame_stem:
-                if fsuffix == "_3_mention":
-                    page_match = re.search(r'_3_mention_(\d+)', frame_stem)
-                    if page_match:
-                        p = int(page_match.group(1))
-                        mentions = sec.get("mentions", [])
-                        if len(mentions) > 3 or sec.get(f"narration_mention_{p}"):
-                            return f"{sid}_mention_{p:02d}"
-                    return f"{sid}_mention"
-                return f"{sid}{asuffix}"
-        return sid
-
-    return sections[0].get("id", "opening") if sections else "opening"
-
-
 # ── ASS 자막 자동 생성 ────────────────────────────────────────────────────
 
 def _auto_generate_subtitles(lang: str, root: str, sections: list, frames: list) -> str:
@@ -245,6 +277,8 @@ def _auto_generate_subtitles(lang: str, root: str, sections: list, frames: list)
         return ass_path
     except Exception as e:
         print(f"  [subtitle] 자막 생성 실패: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 
@@ -261,6 +295,7 @@ def run(lang: str = "KO"):
 
     os.makedirs(video_dir, exist_ok=True)
 
+    # script.json 로드
     if not os.path.isfile(script_path):
         print("❌ script.json 없음"); sys.exit(1)
     with open(script_path, encoding="utf-8") as f:
@@ -268,6 +303,7 @@ def run(lang: str = "KO"):
     sections = script.get("sections", [])
     print(f"📂 섹션 수: {len(sections)}")
 
+    # asset_map.json 로드
     if not os.path.isfile(asset_map_path):
         print("❌ asset_map.json 없음"); sys.exit(1)
     with open(asset_map_path, encoding="utf-8") as f:
@@ -287,11 +323,11 @@ def run(lang: str = "KO"):
         frame_name = os.path.basename(frame_path)
         frame_stem = os.path.splitext(frame_name)[0]
 
-        audio_id = _resolve_audio_id(frame_stem, sections)
+        audio_id = _frame_stem_to_audio_id(frame_stem, sections)
         mp3_path = os.path.join(audio_dir, f"{audio_id}.mp3")
 
         if not os.path.isfile(mp3_path):
-            print(f"  ⚠️ MP3 없음 → 무음: {audio_id}")
+            print(f"  ⚠️ MP3 없음 [{audio_id}] → 무음 처리")
             mp3_path = _make_silent_audio(video_dir, frame_stem)
 
         out_video = os.path.join(video_dir, f"{frame_stem}.mp4")
@@ -310,13 +346,16 @@ def run(lang: str = "KO"):
 
     # ── ASS 자막 자동 생성 및 burn-in ──────────────────────────────────
     print(f"\n📝 자막 처리 중...\n")
-    ass_path    = _auto_generate_subtitles(lang, root, sections, frames)
+    ass_path = _auto_generate_subtitles(lang, root, sections, frames)
     subtitled_path = os.path.join(video_dir, "with_subtitles.mp4")
 
     if ass_path and os.path.isfile(ass_path):
         sub_ok = burn_subtitles(merged_path, ass_path, subtitled_path)
         if sub_ok:
-            os.remove(merged_path)
+            try:
+                os.remove(merged_path)
+            except Exception:
+                pass
             source_for_bgm = subtitled_path
         else:
             print("  ⚠️ 자막 burn-in 실패 → 자막 없는 영상으로 진행")

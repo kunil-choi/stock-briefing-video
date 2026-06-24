@@ -94,40 +94,32 @@ def _build_jobs(sections: list, lang: str) -> list:
             mentions  = section.get("mentions", [])
             n_mentions = len(mentions)
 
+            # builders.py는 항상 _3_mention_{p:02d}.png 형식 사용 (단일 페이지도 _mention_00)
+            # voice.py도 동일하게 항상 _mention_{p:02d}.mp3 형식으로 통일
             if n_mentions > 0:
                 pages = max(1, (n_mentions + 2) // 3)
-                if pages == 1:
-                    text = section.get("narration_mention", "")
+                for p in range(pages):
+                    field = f"narration_mention_{p}"
+                    text  = section.get(field, "")
+                    if not text and pages == 1:
+                        # 단일 페이지: narration_mention 필드도 허용
+                        text = section.get("narration_mention", "")
                     if not text:
+                        page_items = mentions[p * 3: p * 3 + 3]
                         text = " ".join(
                             m.get("quote_narration", m.get("quote", ""))
-                            for m in mentions[:3]
+                            for m in page_items
                         )
                     if text:
-                        jobs.append((text, f"{audio_base}/{sid}_mention.mp3", f"{label} [mention]"))
-                else:
-                    for p in range(pages):
-                        field = f"narration_mention_{p}"
-                        text  = section.get(field, "")
-                        if not text:
-                            page_items = mentions[p * 3: p * 3 + 3]
-                            text = " ".join(
-                                m.get("quote_narration", m.get("quote", ""))
-                                for m in page_items
-                            )
-                        if text:
-                            jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
+                        jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
             else:
+                # mentions 배열이 없는 경우 (narration_mention_N 직접 필드 사용)
                 text_0 = section.get("narration_mention_0", section.get("narration_mention", ""))
                 text_1 = section.get("narration_mention_1", "")
                 text_2 = section.get("narration_mention_2", "")
-
-                if text_1:
-                    for p, text in enumerate([text_0, text_1, text_2]):
-                        if text:
-                            jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
-                elif text_0:
-                    jobs.append((text_0, f"{audio_base}/{sid}_mention.mp3", f"{label} [mention]"))
+                for p, text in enumerate([text_0, text_1, text_2]):
+                    if text:
+                        jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
 
         else:
             narration = section.get("narration", "")
