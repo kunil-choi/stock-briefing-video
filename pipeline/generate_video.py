@@ -28,13 +28,16 @@ import subprocess
 import urllib.request
 
 # BGM 볼륨 설정 (0.0~1.0)
-BGM_URL    = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+BGM_URL    = os.environ.get("BGM_URL", "")
 BGM_VOLUME = 0.065   # 주 오디오를 방해하지 않는 낮은 볼륨
 
 
 # ── BGM 다운로드 ──────────────────────────────────────────────────────────
 
 def download_bgm(save_path: str):
+    if not BGM_URL:
+        print("  [bgm] BGM_URL 미설정 → 외부 데모 음악 다운로드 안 함")
+        return
     if os.path.exists(save_path):
         print(f"  [bgm] 캐시 사용: {save_path}")
         return
@@ -302,6 +305,7 @@ def run(lang: str = "KO"):
         script = json.load(f)
     sections = script.get("sections", [])
     print(f"📂 섹션 수: {len(sections)}")
+    print("🎯 방송 목표 길이: 15분")
 
     # asset_map.json 로드
     if not os.path.isfile(asset_map_path):
@@ -319,6 +323,8 @@ def run(lang: str = "KO"):
     section_videos = []
     print(f"\n🎬 섹션 영상 생성 시작\n")
 
+    missing_audio = []
+
     for frame_path in frames:
         frame_name = os.path.basename(frame_path)
         frame_stem = os.path.splitext(frame_name)[0]
@@ -327,13 +333,20 @@ def run(lang: str = "KO"):
         mp3_path = os.path.join(audio_dir, f"{audio_id}.mp3")
 
         if not os.path.isfile(mp3_path):
-            print(f"  ⚠️ MP3 없음 [{audio_id}] → 무음 처리")
-            mp3_path = _make_silent_audio(video_dir, frame_stem)
+            missing_audio.append(audio_id)
+            print(f"  ❌ MP3 없음 [{audio_id}] → 파이프라인 실패 처리")
+            continue
 
         out_video = os.path.join(video_dir, f"{frame_stem}.mp4")
         ok = build_section_video(frame_path, mp3_path, out_video)
         if ok:
             section_videos.append(out_video)
+
+    if missing_audio:
+        print("\n❌ 누락된 오디오가 있어 영상을 생성하지 않습니다.")
+        for audio_id in missing_audio:
+            print(f"   - {audio_id}.mp3")
+        sys.exit(1)
 
     if not section_videos:
         print("❌ 생성된 섹션 영상 없음"); sys.exit(1)
@@ -394,7 +407,7 @@ def run(lang: str = "KO"):
     print(f"✅ 최종 영상 완성!")
     print(f"   파일: {final_path}")
     print(f"   크기: {size_mb:.1f} MB")
-    print(f"   길이: {mins}분 {secs}초 (목표: 약 10분)")
+    print(f"   길이: {mins}분 {secs}초 (목표: 15분)")
     print(f"{'='*50}\n")
 
 
