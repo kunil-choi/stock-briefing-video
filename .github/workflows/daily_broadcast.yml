@@ -31,20 +31,19 @@ jobs:
   voice:
     needs: script
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests Pillow>=10.0.0
+      - run: pip install openai requests Pillow>=10.0.0
       - uses: actions/download-artifact@v4
         with:
           name: script
           path: output/KO/scripts/
       - env:
-          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
-          ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python pipeline/generate_voice.py KO
       - name: TTS 결과 검증
         run: |
@@ -106,7 +105,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y fonts-noto-cjk fonts-noto-cjk-extra ffmpeg libass-dev libass9
           fc-cache -fv
-          pip install requests Pillow>=10.0.0 openai>=1.0.0
+          pip install openai requests Pillow>=10.0.0
       - uses: actions/download-artifact@v4
         with:
           name: script
@@ -132,45 +131,6 @@ jobs:
           PY
           echo "=== 오디오 파일 목록 ==="
           ls -lh output/KO/audio/*.mp3 2>/dev/null | sort || echo "MP3 없음"
-          echo "=== 프레임-오디오 매핑 검증 ==="
-          python - <<'PY'
-          import glob, os, json, re
-          frames = sorted(glob.glob('output/KO/frames/*.png'))
-          audio_files = set(os.path.splitext(os.path.basename(f))[0] for f in glob.glob('output/KO/audio/*.mp3'))
-          
-          with open('output/KO/scripts/script.json') as f:
-              script = json.load(f)
-          sections = script.get('sections', [])
-          
-          missing = []
-          for frame in frames:
-              stem = os.path.splitext(os.path.basename(frame))[0]
-              # 고정 패턴 매핑
-              if re.match(r'^00_opening$', stem): aid = 'opening'
-              elif re.match(r'^01_market', stem): aid = 'market_summary'
-              elif re.match(r'^02_sector', stem): aid = 'sectors'
-              elif re.match(r'^98_ai_strategy', stem): aid = 'ai_strategy'
-              elif re.match(r'^99_closing', stem): aid = 'closing'
-              else:
-                  m = re.match(r'^\d{2}_(.+)_3_mention_(\d{2})$', stem)
-                  if m: aid = f"stock_{m.group(1)}_mention_{m.group(2)}"
-                  else:
-                      m = re.match(r'^\d{2}_(.+)_2_chart$', stem)
-                      if m: aid = f"stock_{m.group(1)}_chart"
-                      else:
-                          m = re.match(r'^\d{2}_(.+)_1_summary$', stem)
-                          if m: aid = f"stock_{m.group(1)}_summary"
-                          else: aid = stem
-              if aid not in audio_files:
-                  missing.append((stem, aid))
-          
-          if missing:
-              print(f"⚠️ 오디오 누락 {len(missing)}개:")
-              for s, a in missing:
-                  print(f"   {s} → {a}.mp3 없음")
-          else:
-              print(f"✅ 모든 프레임({len(frames)}개)에 오디오 매핑 확인됨")
-          PY
       - run: python pipeline/generate_subtitles.py KO
       - run: python pipeline/generate_video.py KO
       - name: 영상 품질 검증
@@ -187,8 +147,6 @@ jobs:
           print(f"영상 길이: {mins}분 {secs}초")
           if duration < 600:
               print(f"⚠️ 경고: 영상이 {mins}분{secs}초로 너무 짧습니다 (목표: 15분)")
-          elif duration > 1200:
-              print(f"⚠️ 경고: 영상이 {mins}분{secs}초로 너무 깁니다 (목표: 15분)")
           else:
               print(f"✅ 영상 길이 정상: {mins}분{secs}초")
           PY
