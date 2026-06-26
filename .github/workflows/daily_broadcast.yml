@@ -37,7 +37,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests Pillow>=10.0.0
+      - run: pip install requests 'Pillow>=10.0.0'
       - uses: actions/download-artifact@v4
         with:
           name: script
@@ -64,7 +64,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y fonts-noto-cjk fonts-noto-cjk-extra ffmpeg
           fc-cache -fv
-          pip install requests Pillow>=10.0.0 pykrx matplotlib pandas mplfinance python-dotenv
+          pip install requests 'Pillow>=10.0.0' pykrx matplotlib pandas mplfinance python-dotenv
       - uses: actions/download-artifact@v4
         with:
           name: script
@@ -88,7 +88,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y fonts-noto-cjk fonts-noto-cjk-extra ffmpeg libass-dev libass9
           fc-cache -fv
-          pip install requests Pillow>=10.0.0 openai>=1.0.0
+          pip install requests 'Pillow>=10.0.0' openai>=1.0.0
       - uses: actions/download-artifact@v4
         with:
           name: script
@@ -97,10 +97,48 @@ jobs:
         with:
           name: voice
           path: output/KO/audio/
+      - name: Normalize voice artifact files
+        run: |
+          python - <<'PY'
+          import glob, os, shutil
+          target = 'output/KO/audio'
+          os.makedirs(target, exist_ok=True)
+          files = glob.glob(os.path.join(target, '**', '*'), recursive=True)
+          copied = 0
+          for src in files:
+              if not os.path.isfile(src):
+                  continue
+              dst = os.path.join(target, os.path.basename(src))
+              if os.path.abspath(src) == os.path.abspath(dst):
+                  continue
+              shutil.copy2(src, dst)
+              copied += 1
+          print(f'normalized audio files: {copied}')
+          for p in sorted(glob.glob(os.path.join(target, '*'))):
+              print(p)
+          PY
       - uses: actions/download-artifact@v4
         with:
           name: assets
           path: output/KO/frames/
+      - name: Normalize asset artifact files
+        run: |
+          python - <<'PY'
+          import glob, os, shutil
+          target = 'output/KO/frames'
+          os.makedirs(target, exist_ok=True)
+          files = glob.glob(os.path.join(target, '**', '*.png'), recursive=True)
+          copied = 0
+          for src in files:
+              dst = os.path.join(target, os.path.basename(src))
+              if os.path.abspath(src) == os.path.abspath(dst):
+                  continue
+              shutil.copy2(src, dst)
+              copied += 1
+          print(f'normalized frame files: {copied}')
+          for p in sorted(glob.glob(os.path.join(target, '*.png'))):
+              print(p)
+          PY
       - run: |
           python - <<'PY'
           import glob, json, os
