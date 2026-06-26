@@ -27,6 +27,11 @@ import re
 import subprocess
 import urllib.request
 
+# 목표 길이 설정
+TARGET_MIN = float(os.environ.get("TARGET_MIN_SECONDS", "870"))   # 14분 30초
+TARGET_MAX = float(os.environ.get("TARGET_MAX_SECONDS", "930"))   # 15분 30초
+TARGET_IDEAL = 900.0  # 15분 정확
+
 # BGM 볼륨 설정 (0.0~1.0)
 BGM_URL    = os.environ.get("BGM_URL", "")
 BGM_VOLUME = 0.065   # 주 오디오를 방해하지 않는 낮은 볼륨
@@ -69,11 +74,6 @@ def get_audio_duration(mp3_path: str) -> float:
 # ── 프레임 스템 → 오디오 ID 변환 ─────────────────────────────────────────
 
 def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
-    """
-    프레임 파일 스템(확장자 없는 파일명)을 오디오 ID로 변환합니다.
-    generate_subtitles.py 와 동일한 로직을 사용합니다.
-    """
-    # 고정 패턴
     fixed_patterns = [
         (r'^00_opening$',    'opening'),
         (r'^01_market',      'market_summary'),
@@ -85,7 +85,6 @@ def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
         if re.match(pattern, stem):
             return audio_id
 
-    # mention 페이지 있음: NN_종목명_3_mention_MM
     m = re.match(r'^\d{2}_(.+)_3_mention_(\d{2})$', stem)
     if m:
         stock_name = m.group(1)
@@ -93,35 +92,29 @@ def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
         sid = _find_stock_section_id(stock_name, sections)
         return f"{sid}_mention_{page_num}"
 
-    # mention 단일: NN_종목명_3_mention
-    # builders.py는 항상 _3_mention_{p:02d}.png 형식 사용로 이 패턴은 실제 도달 불가, 방어적으로 _mention_00 반환
     m = re.match(r'^\d{2}_(.+)_3_mention$', stem)
     if m:
         stock_name = m.group(1)
         sid = _find_stock_section_id(stock_name, sections)
         return f"{sid}_mention_00"
 
-    # chart: NN_종목명_2_chart
     m = re.match(r'^\d{2}_(.+)_2_chart$', stem)
     if m:
         stock_name = m.group(1)
         sid = _find_stock_section_id(stock_name, sections)
         return f"{sid}_chart"
 
-    # summary: NN_종목명_1_summary
     m = re.match(r'^\d{2}_(.+)_1_summary$', stem)
     if m:
         stock_name = m.group(1)
         sid = _find_stock_section_id(stock_name, sections)
         return f"{sid}_summary"
 
-    # fallback
     print(f"  ⚠️ 오디오 ID 매핑 실패 — 스템: {stem}")
     return stem
 
 
 def _find_stock_section_id(stock_name: str, sections: list) -> str:
-    """종목명으로 sections에서 실제 section ID를 찾습니다."""
     for sec in sections:
         sid = sec.get("id", "")
         if sid in (f"stock_{stock_name}", f"hidden_{stock_name}"):
@@ -136,7 +129,6 @@ def _find_stock_section_id(stock_name: str, sections: list) -> str:
 # ── 섹션 영상 생성 (PNG + MP3 → MP4) ─────────────────────────────────────
 
 def build_section_video(png_path: str, mp3_path: str, out_path: str) -> bool:
-    """PNG + MP3 → 섹션 MP4 변환."""
     duration = get_audio_duration(mp3_path)
 
     cmd = [
@@ -185,18 +177,67 @@ def concat_videos(video_list: list, out_path: str) -> bool:
     return True
 
 
+# ── 영상 길이 조정 (15분에 맞추기) ───────────────────────────────────────
+
+def adjust_to_target_duration(input_path: str, output_path: str,
+                               current_duration: float) -> bool:
+    """
+    영상 길이를 목표 시간(15분)에 맞게 조정합니다.
+    - 너무 짧으면 (< 14분30초): 마지막 프레임 반복으로 늘림
+    - 너무 길면 (> 15분30초): 속도 미세 조정으로 줄임
+    - 범위 내이면: 그대로 유지
+    """
+    if TARGET_MIN <= current_duration <= TARGET_MAX:
+        import shutil
+        shutil.copy2(input_path, output_path)
+        print(f"  ✅ 영상 길이 정상 ({current_duration:.0f}초 = {int(current_duration//60)}분{int(current_duration%60)}초)")
+        return True
+
+    if current_duration < TARGET_MIN:
+        # 마지막 프레임 반복으로 패딩
+        pad_seconds = TARGET_IDEAL - current_duration
+        print(f"  ⏱ 영상이 짧음 ({current_duration:.0f}초) → {pad_seconds:.0f}초 패딩 추가")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-vf", f"tpad=stop_mode=clone:stop_duration={pad_seconds:.1f}",
+            "-af", f"apad=pad_dur={pad_seconds:.1f}",
+            "-c:v", "libx264", "-crf", "20", "-preset", "fast",
+            "-c:a", "aac", "-b:a", "192k",
+            output_path
+        ]
+    else:
+        # 속도 조정으로 줄이기 (최대 10% 빠르게)
+        speed = current_duration / TARGET_IDEAL
+        if speed > 1.1:
+            speed = 1.1
+        print(f"  ⏱ 영상이 길음 ({current_duration:.0f}초) → {speed:.3f}배속으로 조정")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", input_path,
+            "-filter_complex", f"[0:v]setpts={1/speed:.4f}*PTS[v];[0:a]atempo={speed:.4f}[a]",
+            "-map", "[v]", "-map", "[a]",
+            "-c:v", "libx264", "-crf", "20", "-preset", "fast",
+            "-c:a", "aac", "-b:a", "192k",
+            output_path
+        ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"  ❌ 길이 조정 실패: {result.stderr[-400:]}")
+        import shutil
+        shutil.copy2(input_path, output_path)
+        return False
+    return True
+
+
 # ── ASS 자막 burn-in ──────────────────────────────────────────────────────
 
 def burn_subtitles(video_path: str, ass_path: str, out_path: str) -> bool:
-    """
-    ASS 자막 파일을 영상에 burn-in합니다.
-    자막이 나레이션 타이밍에 맞춰 화면 하단에 표출됩니다.
-    """
     if not os.path.isfile(ass_path):
         print(f"  ⚠️ ASS 자막 파일 없음: {ass_path}")
         return False
 
-    # ASS 경로 이스케이프 (libass 요구사항)
     ass_escaped = ass_path.replace("\\", "/").replace(":", "\\:")
 
     cmd = [
@@ -248,23 +289,9 @@ def mix_bgm(video_path: str, bgm_path: str, out_path: str) -> bool:
     return True
 
 
-# ── 무음 오디오 생성 ──────────────────────────────────────────────────────
-
-def _make_silent_audio(tmp_dir: str, name: str, duration: float = 3.0) -> str:
-    path = os.path.join(tmp_dir, f"silent_{name}.mp3")
-    if not os.path.exists(path):
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-t", str(duration), "-c:a", "libmp3lame", path
-        ], capture_output=True)
-    return path
-
-
 # ── ASS 자막 자동 생성 ────────────────────────────────────────────────────
 
 def _auto_generate_subtitles(lang: str, root: str, sections: list, frames: list) -> str:
-    """자막 파일이 없으면 자동 생성합니다."""
     sub_dir  = os.path.join(root, "output", lang, "subtitles")
     ass_path = os.path.join(sub_dir, "subtitle.ass")
 
@@ -298,16 +325,14 @@ def run(lang: str = "KO"):
 
     os.makedirs(video_dir, exist_ok=True)
 
-    # script.json 로드
     if not os.path.isfile(script_path):
         print("❌ script.json 없음"); sys.exit(1)
     with open(script_path, encoding="utf-8") as f:
         script = json.load(f)
     sections = script.get("sections", [])
     print(f"📂 섹션 수: {len(sections)}")
-    print("🎯 방송 목표 길이: 15분")
+    print(f"🎯 방송 목표 길이: 15분 ({TARGET_MIN:.0f}~{TARGET_MAX:.0f}초)")
 
-    # asset_map.json 로드
     if not os.path.isfile(asset_map_path):
         print("❌ asset_map.json 없음"); sys.exit(1)
     with open(asset_map_path, encoding="utf-8") as f:
@@ -315,7 +340,6 @@ def run(lang: str = "KO"):
     frames = asset_map.get("frames", [])
     print(f"📂 프레임 수: {len(frames)}")
 
-    # BGM 다운로드
     os.makedirs(os.path.dirname(bgm_path), exist_ok=True)
     download_bgm(bgm_path)
 
@@ -324,6 +348,7 @@ def run(lang: str = "KO"):
     print(f"\n🎬 섹션 영상 생성 시작\n")
 
     missing_audio = []
+    total_audio_duration = 0.0
 
     for frame_path in frames:
         frame_name = os.path.basename(frame_path)
@@ -336,6 +361,9 @@ def run(lang: str = "KO"):
             missing_audio.append(audio_id)
             print(f"  ❌ MP3 없음 [{audio_id}] → 파이프라인 실패 처리")
             continue
+
+        dur = get_audio_duration(mp3_path)
+        total_audio_duration += dur
 
         out_video = os.path.join(video_dir, f"{frame_stem}.mp4")
         ok = build_section_video(frame_path, mp3_path, out_video)
@@ -351,11 +379,27 @@ def run(lang: str = "KO"):
     if not section_videos:
         print("❌ 생성된 섹션 영상 없음"); sys.exit(1)
 
+    total_mins = int(total_audio_duration // 60)
+    total_secs = int(total_audio_duration % 60)
+    print(f"\n📊 총 오디오 길이: {total_mins}분 {total_secs}초")
+
     # ── 영상 합치기 ────────────────────────────────────────────────────
     print(f"\n✂️ 영상 컷 연결 중...\n")
     merged_path = os.path.join(video_dir, "merged.mp4")
     if not concat_videos(section_videos, merged_path):
         sys.exit(1)
+
+    # ── 15분 길이 조정 ─────────────────────────────────────────────────
+    print(f"\n⏱ 영상 길이 조정 중...\n")
+    merged_duration = get_audio_duration(merged_path)
+    adjusted_path = os.path.join(video_dir, "adjusted.mp4")
+    adjust_to_target_duration(merged_path, adjusted_path, merged_duration)
+    if os.path.isfile(adjusted_path):
+        try: os.remove(merged_path)
+        except: pass
+        source_for_sub = adjusted_path
+    else:
+        source_for_sub = merged_path
 
     # ── ASS 자막 자동 생성 및 burn-in ──────────────────────────────────
     print(f"\n📝 자막 처리 중...\n")
@@ -363,19 +407,17 @@ def run(lang: str = "KO"):
     subtitled_path = os.path.join(video_dir, "with_subtitles.mp4")
 
     if ass_path and os.path.isfile(ass_path):
-        sub_ok = burn_subtitles(merged_path, ass_path, subtitled_path)
+        sub_ok = burn_subtitles(source_for_sub, ass_path, subtitled_path)
         if sub_ok:
-            try:
-                os.remove(merged_path)
-            except Exception:
-                pass
+            try: os.remove(source_for_sub)
+            except: pass
             source_for_bgm = subtitled_path
         else:
             print("  ⚠️ 자막 burn-in 실패 → 자막 없는 영상으로 진행")
-            source_for_bgm = merged_path
+            source_for_bgm = source_for_sub
     else:
         print("  ⚠️ 자막 파일 없음 → 자막 없는 영상으로 진행")
-        source_for_bgm = merged_path
+        source_for_bgm = source_for_sub
 
     # ── BGM 믹싱 ───────────────────────────────────────────────────────
     print(f"\n🎵 BGM 믹싱 중...\n")
@@ -384,21 +426,15 @@ def run(lang: str = "KO"):
         sys.exit(1)
 
     # 임시 파일 정리
-    for temp in [merged_path, subtitled_path]:
-        if os.path.isfile(temp):
-            try:
-                os.remove(temp)
-            except Exception:
-                pass
+    for temp in [merged_path, adjusted_path, subtitled_path, source_for_sub, source_for_bgm]:
+        if os.path.isfile(temp) and temp != final_path:
+            try: os.remove(temp)
+            except: pass
     for v in section_videos:
-        try:
-            os.remove(v)
-        except Exception:
-            pass
+        try: os.remove(v)
+        except: pass
 
     size_mb = os.path.getsize(final_path) / (1024 * 1024)
-
-    # 영상 길이 확인
     total_duration = get_audio_duration(final_path)
     mins = int(total_duration // 60)
     secs = int(total_duration % 60)
@@ -408,6 +444,8 @@ def run(lang: str = "KO"):
     print(f"   파일: {final_path}")
     print(f"   크기: {size_mb:.1f} MB")
     print(f"   길이: {mins}분 {secs}초 (목표: 15분)")
+    if not (TARGET_MIN <= total_duration <= TARGET_MAX):
+        print(f"   ⚠️ 경고: 목표 길이({int(TARGET_MIN//60)}분~{int(TARGET_MAX//60)}분)를 벗어났습니다")
     print(f"{'='*50}\n")
 
 
