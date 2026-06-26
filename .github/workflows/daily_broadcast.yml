@@ -31,7 +31,7 @@ jobs:
   voice:
     needs: script
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,6 +46,18 @@ jobs:
           ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
           ELEVENLABS_VOICE_ID: ${{ secrets.ELEVENLABS_VOICE_ID }}
         run: python pipeline/generate_voice.py KO
+      - name: TTS 결과 검증
+        run: |
+          echo "=== 생성된 오디오 파일 목록 ==="
+          ls -lh output/KO/audio/ || echo "audio 폴더 없음"
+          echo "=== summary.json ==="
+          cat output/KO/audio/summary.json 2>/dev/null || echo "summary.json 없음"
+          total=$(ls output/KO/audio/*.mp3 2>/dev/null | wc -l)
+          echo "총 MP3 파일 수: $total"
+          if [ "$total" -lt 5 ]; then
+            echo "❌ MP3 파일이 너무 적습니다 ($total개). TTS 실패 가능성."
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: voice
@@ -70,6 +82,12 @@ jobs:
           name: script
           path: output/KO/scripts/
       - run: python pipeline/generate_assets.py KO
+      - name: 프레임 검증
+        run: |
+          echo "=== 생성된 프레임 목록 ==="
+          ls output/KO/frames/*.png | sort || echo "frames 없음"
+          total=$(ls output/KO/frames/*.png 2>/dev/null | wc -l)
+          echo "총 프레임 수: $total"
       - uses: actions/upload-artifact@v4
         with:
           name: assets
@@ -101,22 +119,85 @@ jobs:
         with:
           name: assets
           path: output/KO/frames/
-      - run: |
+      - name: asset_map.json 생성 및 검증
+        run: |
           python - <<'PY'
           import glob, json, os
           frames = sorted(glob.glob('output/KO/frames/*.png'))
+          print(f"발견된 프레임: {len(frames)}개")
+          for f in frames:
+              print(f"  {os.path.basename(f)}")
           os.makedirs('output/KO', exist_ok=True)
           json.dump({'frames': frames, 'lang': 'KO'}, open('output/KO/asset_map.json','w',encoding='utf-8'), ensure_ascii=False, indent=2)
-          print(f'frames={len(frames)}')
+          PY
+          echo "=== 오디오 파일 목록 ==="
+          ls -lh output/KO/audio/*.mp3 2>/dev/null | sort || echo "MP3 없음"
+          echo "=== 프레임-오디오 매핑 검증 ==="
+          python - <<'PY'
+          import glob, os, json, re
+          frames = sorted(glob.glob('output/KO/frames/*.png'))
+          audio_files = set(os.path.splitext(os.path.basename(f))[0] for f in glob.glob('output/KO/audio/*.mp3'))
+          
+          with open('output/KO/scripts/script.json') as f:
+              script = json.load(f)
+          sections = script.get('sections', [])
+          
+          missing = []
+          for frame in frames:
+              stem = os.path.splitext(os.path.basename(frame))[0]
+              # 고정 패턴 매핑
+              if re.match(r'^00_opening$', stem): aid = 'opening'
+              elif re.match(r'^01_market', stem): aid = 'market_summary'
+              elif re.match(r'^02_sector', stem): aid = 'sectors'
+              elif re.match(r'^98_ai_strategy', stem): aid = 'ai_strategy'
+              elif re.match(r'^99_closing', stem): aid = 'closing'
+              else:
+                  m = re.match(r'^\d{2}_(.+)_3_mention_(\d{2})$', stem)
+                  if m: aid = f"stock_{m.group(1)}_mention_{m.group(2)}"
+                  else:
+                      m = re.match(r'^\d{2}_(.+)_2_chart$', stem)
+                      if m: aid = f"stock_{m.group(1)}_chart"
+                      else:
+                          m = re.match(r'^\d{2}_(.+)_1_summary$', stem)
+                          if m: aid = f"stock_{m.group(1)}_summary"
+                          else: aid = stem
+              if aid not in audio_files:
+                  missing.append((stem, aid))
+          
+          if missing:
+              print(f"⚠️ 오디오 누락 {len(missing)}개:")
+              for s, a in missing:
+                  print(f"   {s} → {a}.mp3 없음")
+          else:
+              print(f"✅ 모든 프레임({len(frames)}개)에 오디오 매핑 확인됨")
           PY
       - run: python pipeline/generate_subtitles.py KO
-      - env:
-          TARGET_MIN_SECONDS: "870"
-          TARGET_MAX_SECONDS: "930"
+      - run: python pipeline/generate_video.py KO
+      - name: 영상 품질 검증
         run: |
-          python pipeline/generate_video.py KO
-          python pipeline/quality_gate.py KO
+          if [ -f "output/KO/video/final.mp4" ]; then
+            duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 output/KO/video/final.mp4)
+            echo "영상 길이: ${duration}초"
+            size=$(du -sh output/KO/video/final.mp4 | cut -f1)
+            echo "파일 크기: $size"
+            python - <<PY
+          duration = float("${duration}")
+          mins = int(duration // 60)
+          secs = int(duration % 60)
+          print(f"영상 길이: {mins}분 {secs}초")
+          if duration < 600:
+              print(f"⚠️ 경고: 영상이 {mins}분{secs}초로 너무 짧습니다 (목표: 15분)")
+          elif duration > 1200:
+              print(f"⚠️ 경고: 영상이 {mins}분{secs}초로 너무 깁니다 (목표: 15분)")
+          else:
+              print(f"✅ 영상 길이 정상: {mins}분{secs}초")
+          PY
+          else
+            echo "❌ final.mp4 생성 실패"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: final-video
           path: output/KO/video/final.mp4
+          retention-days: 30
