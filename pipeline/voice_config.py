@@ -22,7 +22,7 @@ MODEL_ID = "eleven_multilingual_v2"
 
 # 기본 Voice ID (환경변수 ELEVENLABS_VOICE_ID 로 덮어쓸 수 있음)
 # 변경하려면 ElevenLabs 콘솔에서 원하는 voice_id 를 복사해 아래에 붙여넣으세요.
-DEFAULT_VOICE_ID = "XrExE9yKIg1WjnnlVkGX"   # 기본: Matilda (한국어 지원)
+DEFAULT_VOICE_ID = ""   # 기본값 비움: GitHub Secret ELEVENLABS_VOICE_ID 사용 권장
 
 # 목소리 파라미터
 VOICE_SETTINGS = {
@@ -45,11 +45,11 @@ VOICE_PRESETS = {
     "rachel":    "21m00Tcm4TlvDq8ikWAM",   # Rachel — 영어/한국어 혼용
     "charlie":   "IKne3meq5aSn9XLyUdCD",   # Charlie — 남성 딥보이스
     "daniel":    "onwK4e9ZLuTAKqWW03F9",   # Daniel — 영국식 남성
-    "custom":    "",                         # 커스텀 클론 목소리 ID (직접 입력)
+    "custom":    "",                         # 커스텀 클론 목소리 ID (보통 Secret으로 주입)
 }
 
 # 현재 사용할 프리셋 (VOICE_PRESETS 키 중 하나)
-DEFAULT_VOICE_PRESET = "matilda"
+DEFAULT_VOICE_PRESET = "custom"
 
 
 def get_voice_id() -> str:
