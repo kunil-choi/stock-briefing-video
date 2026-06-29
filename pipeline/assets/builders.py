@@ -1,7 +1,7 @@
 # pipeline/assets/builders.py
 """
 KBS 머니올라 — 고품질 방송 비주얼 빌더
-Google NotebookLM 이상의 비주얼 퀄리티를 목표로 합니다.
+프레젠테이션 퀄리티: 정보를 그래픽 요소로 시각화
 """
 import os
 import re
@@ -62,44 +62,60 @@ def _paste_fill(img: Image.Image, path: str, box: tuple):
         print(f"[builders] 이미지 붙이기 실패 ({path}): {e}")
 
 
-def _draw_stat_box(draw, img, x, y, width, height, label, value, change="",
-                   positive=True, color=None):
-    """데이터 통계 박스 컴포넌트."""
-    color = color or C["gold"]
-    # 배경
-    draw.rounded_rectangle([x, y, x + width, y + height],
-                            radius=14, fill=(18, 22, 62))
-    draw.rounded_rectangle([x, y, x + width, y + 4],
-                            radius=0, fill=color)
+# ── 공통: 대형 지수 카드 ───────────────────────────────────────────────────
+
+def _draw_index_card(draw, img, x, y, w, h, label, value, change, positive,
+                     accent_color, label_color=None):
+    """대형 지수 카드 — 깔끔한 정보 계층 구조"""
+    bg = (14, 20, 58)
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=20, fill=bg)
+
+    # 상단 강조 바
+    draw.rounded_rectangle([x, y, x + w, y + 6], radius=4, fill=accent_color)
+    # 왼쪽 강조 바
+    draw.rounded_rectangle([x, y, x + 6, y + h], radius=4, fill=(*accent_color, 180))
+
     # 레이블
-    draw.text((x + 16, y + 16), label,
-              font=fnt(26, bold=False), fill=(160, 170, 210))
-    # 값
-    draw.text((x + 16, y + 48), value,
-              font=fnt(48, bold=True), fill=C["white"])
-    # 등락
+    lc = label_color or accent_color
+    draw.text((x + 28, y + 22), label, font=fnt(32, bold=True), fill=lc)
+
+    # 값 (대형)
+    draw.text((x + 28, y + 62), value, font=fnt(68, bold=True), fill=C["white"])
+
+    # 등락 배지
     if change:
-        change_color = C["red"] if positive else C["blue"]
+        ch_color = C["red"] if positive else C["blue"]
         arrow = "▲" if positive else "▼"
-        draw.text((x + 16, y + height - 36), f"{arrow} {change}",
-                  font=fnt(28, bold=True), fill=change_color)
+        badge_text = f" {arrow} {change} "
+        try:
+            bw2 = int(draw.textlength(badge_text, font=fnt(30, bold=True))) + 16
+        except Exception:
+            bw2 = 160
+        bx = x + 28
+        by = y + h - 56
+        draw.rounded_rectangle([bx, by, bx + bw2, by + 44],
+                                radius=10, fill=(*ch_color, 35))
+        draw.rounded_rectangle([bx, by, bx + bw2, by + 44],
+                                radius=10, outline=ch_color, width=1)
+        draw.text((bx + 8, by + 7), f"{arrow} {change}",
+                  font=fnt(30, bold=True), fill=ch_color)
 
 
-def _draw_market_indicator_row(draw, img, x, y, label, value, change, positive):
-    """시장 지표 한 줄 표시."""
-    indicator_h = 70
-    draw.rounded_rectangle([x, y, W - MARGIN_X, y + indicator_h],
-                            radius=10, fill=(15, 20, 52))
-    draw.line([x, y, x + 5, y + indicator_h], fill=C["gold"], width=5)
+def _draw_mini_index_row(draw, x, y, w, label, value, change, positive, accent_color):
+    """소형 지수 행 — 여러 지수를 세로로 나열할 때"""
+    h = 78
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=12, fill=(12, 18, 50))
+    draw.rounded_rectangle([x, y, x + 5, y + h], radius=4, fill=accent_color)
 
-    draw.text((x + 22, y + 14), label,
-              font=fnt(30, bold=True), fill=C["white"])
-    val_color = C["red"] if positive else C["blue"]
-    draw.text((W - MARGIN_X - 20, y + 14), value,
-              font=fnt(30, bold=True), fill=val_color, anchor="ra")
+    draw.text((x + 22, y + 10), label, font=fnt(26, bold=True),
+              fill=(180, 185, 225))
+    ch_color = C["red"] if positive else C["blue"]
     arrow = "▲" if positive else "▼"
-    draw.text((W - MARGIN_X - 20, y + 44), f"{arrow} {change}",
-              font=fnt(22, bold=False), fill=val_color, anchor="ra")
+    draw.text((x + w - 20, y + 10), value,
+              font=fnt(30, bold=True), fill=C["white"], anchor="ra")
+    draw.text((x + w - 20, y + 46), f"{arrow} {change}",
+              font=fnt(22, bold=False), fill=ch_color, anchor="ra")
+    return y + h + 10
 
 
 # ── 오프닝 ─────────────────────────────────────────────────────────────────
@@ -111,7 +127,7 @@ def build_opening(data, out_dir):
     keywords = sec.get("keywords", [])
     date_str = data.get("date", "")
 
-    # ── 중앙 원형 글로우 배경 ─────────────────────────────────────────
+    # 중앙 원형 글로우 배경
     glow_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     gdraw    = ImageDraw.Draw(glow_img)
     for r in range(320, 0, -4):
@@ -124,7 +140,7 @@ def build_opening(data, out_dir):
     img = Image.alpha_composite(img.convert("RGBA"), glow_img).convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    # ── KBS 머니올라 로고 배지 ────────────────────────────────────────
+    # KBS 머니올라 로고 배지
     badge_y = H // 2 - 310
     badge_w, badge_h = 380, 64
     draw.rounded_rectangle([CX - badge_w // 2, badge_y,
@@ -135,20 +151,16 @@ def build_opening(data, out_dir):
 
     cy = H // 2 - 210
 
-    # ── 메인 타이틀 ──────────────────────────────────────────────────
     draw_glow_text(draw, (CX, cy), "주식시장 브리핑",
                    font=fnt(92, bold=True), fill=C["white"],
                    glow_color=C["gold"], glow_radius=4, anchor="mm")
     cy += 110
 
-    # ── 서브 타이틀 ──────────────────────────────────────────────────
     draw.text((CX, cy), "오늘의 핵심만 골라 드립니다",
               font=fnt(42, bold=False), fill=(180, 190, 230), anchor="mm")
     cy += 60
 
-    # ── 날짜 ─────────────────────────────────────────────────────────
     if date_str:
-        # 날짜 배지
         dw = 320
         draw.rounded_rectangle([CX - dw // 2, cy, CX + dw // 2, cy + 52],
                                 radius=26, fill=(20, 28, 75))
@@ -158,7 +170,6 @@ def build_opening(data, out_dir):
                   font=fnt(32, bold=False), fill=C["gold"], anchor="mm")
         cy += 76
 
-    # ── 구분선 ───────────────────────────────────────────────────────
     for i in range(3):
         alpha = [200, 120, 60][i]
         offset = [0, 6, 12][i]
@@ -166,23 +177,20 @@ def build_opening(data, out_dir):
                   fill=(*C["gold"], alpha), width=2 - i if i < 2 else 1)
     cy += 30
 
-    # ── 키워드 태그 ──────────────────────────────────────────────────
     if keywords:
         kw_colors = [C["gold"], C["green"], C["blue"], (220, 100, 220)]
         kw_list   = keywords[:4]
         font_kw   = fnt(30, bold=False)
-        tag_pad   = 22
         tag_hs    = []
         for kw in kw_list:
             try: tw = int(draw.textlength(kw, font=font_kw))
             except Exception: tw = len(kw) * 16
-            tag_hs.append(tw + tag_pad * 2)
+            tag_hs.append(tw + 44)
         total_w = sum(tag_hs) + 20 * (len(kw_list) - 1)
         kx = (W - total_w) // 2
 
         for i, kw in enumerate(kw_list):
             col = kw_colors[i % len(kw_colors)]
-            tw  = tag_hs[i] - tag_pad * 2
             tag_w = tag_hs[i]
             draw.rounded_rectangle([kx, cy, kx + tag_w, cy + 50],
                                     radius=25, fill=(*col, 30))
@@ -199,108 +207,114 @@ def build_opening(data, out_dir):
 # ── 시장 요약 ───────────────────────────────────────────────────────────────
 
 def build_market_summary(data, out_dir):
-    sec      = _find_section(data.get("sections", []), "market_summary")
-    img      = new_frame(theme="blue")
-    draw     = ImageDraw.Draw(img)
-    draw_topbar(draw, "시장 요약")
+    sec = _find_section(data.get("sections", []), "market_summary")
+    img  = new_frame(theme="blue")
+    draw = ImageDraw.Draw(img)
+    draw_topbar(draw, "오늘의 시장 요약")
 
-    kospi    = sec.get("kospi_value", "")
-    change   = sec.get("kospi_change", "")
-    positive = sec.get("kospi_change_positive", True)
-    kosdaq   = sec.get("kosdaq_value", "")
-    kosdaq_ch = sec.get("kosdaq_change", "")
-    kosdaq_pos = sec.get("kosdaq_change_positive", True)
-    points   = sec.get("points", [])
+    kospi        = sec.get("kospi_value", "")
+    kospi_ch     = sec.get("kospi_change", "")
+    kospi_pos    = sec.get("kospi_change_positive", True)
+    kosdaq       = sec.get("kosdaq_value", "")
+    kosdaq_ch    = sec.get("kosdaq_change", "")
+    kosdaq_pos   = sec.get("kosdaq_change_positive", True)
+    points       = sec.get("points", [])
     corner_summary = sec.get("corner_summary", "")
 
+    # ── 레이아웃: 상단 2/3 = 지수 카드, 하단 1/3 = 핵심 포인트 ──
+
+    # 코너 요약 한줄 배너
     cy = 96
-
-    # ── 코너 요약 배지 ────────────────────────────────────────────────
     if corner_summary:
-        draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 50],
-                                radius=25, fill=(25, 35, 80))
-        draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 50],
-                                radius=25, outline=C["gold"], width=1)
-        draw_wrapped_text(draw, f"  {corner_summary}",
-                          MARGIN_X + 20, cy + 10, W - MARGIN_X * 2 - 40,
-                          size=26, bold=False, color=C["gold"], line_gap=6)
-        cy += 66
+        draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 52],
+                                radius=10, fill=(8, 25, 72))
+        draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 5, cy + 52],
+                                radius=0, fill=C["gold"])
+        draw.text((MARGIN_X + 22, cy + 14), corner_summary,
+                  font=fnt(28, bold=False), fill=C["gold"])
+        cy += 68
 
-    # ── 지수 카드 (가로 2분할) ─────────────────────────────────────────
-    card_w = (W - MARGIN_X * 2 - 40) // 2
+    # ── 상단: 국내 지수 대형 카드 (좌) + 해외/환율 소형 스택 (우) ──
+    LEFT_W  = int((W - MARGIN_X * 2) * 0.52)
+    RIGHT_W = W - MARGIN_X * 2 - LEFT_W - 32
+    CARD_H  = 200
+    RX      = MARGIN_X + LEFT_W + 32
 
-    # KOSPI 카드
+    # KOSPI 대형 카드
     if kospi:
-        kx = MARGIN_X
-        draw.rounded_rectangle([kx, cy, kx + card_w, cy + 140],
-                                radius=16, fill=(18, 25, 65))
-        draw.rounded_rectangle([kx, cy, kx + 6, cy + 140],
-                                radius=4, fill=C["gold"])
-        draw.text((kx + 22, cy + 12), "KOSPI",
-                  font=fnt(30, bold=True), fill=C["gold"])
-        draw.text((kx + 22, cy + 52), kospi,
-                  font=fnt(56, bold=True), fill=C["white"])
-        if change:
-            ch_color = C["red"] if positive else C["blue"]
-            arrow = "▲" if positive else "▼"
-            draw.text((kx + 22, cy + 112), f"{arrow} {change}",
-                      font=fnt(28, bold=True), fill=ch_color)
+        _draw_index_card(draw, img,
+                         MARGIN_X, cy, LEFT_W, CARD_H,
+                         "KOSPI", kospi, kospi_ch, kospi_pos,
+                         C["gold"])
 
-    # KOSDAQ 카드
+    # KOSDAQ 소형 (우측 상단)
+    ry = cy
     if kosdaq:
-        dx = MARGIN_X + card_w + 40
-        draw.rounded_rectangle([dx, cy, dx + card_w, cy + 140],
-                                radius=16, fill=(18, 25, 65))
-        draw.rounded_rectangle([dx, cy, dx + 6, cy + 140],
-                                radius=4, fill=C["blue"])
-        draw.text((dx + 22, cy + 12), "KOSDAQ",
-                  font=fnt(30, bold=True), fill=C["blue"])
-        draw.text((dx + 22, cy + 52), kosdaq,
-                  font=fnt(56, bold=True), fill=C["white"])
-        if kosdaq_ch:
-            ch_color = C["red"] if kosdaq_pos else C["blue"]
-            arrow = "▲" if kosdaq_pos else "▼"
-            draw.text((dx + 22, cy + 112), f"{arrow} {kosdaq_ch}",
-                      font=fnt(28, bold=True), fill=ch_color)
+        ry = _draw_mini_index_row(draw, RX, ry, RIGHT_W,
+                                  "KOSDAQ", kosdaq, kosdaq_ch, kosdaq_pos,
+                                  C["blue"])
 
-    if kospi or kosdaq:
-        cy += 162
+    # 해외 지수 — script에서 제공되지 않으면 레이블만 표시
+    overseas = [
+        ("NASDAQ", sec.get("nasdaq_value", ""), sec.get("nasdaq_change", ""), sec.get("nasdaq_positive", False)),
+        ("S&P500",  sec.get("sp500_value", ""),  sec.get("sp500_change", ""),  sec.get("sp500_positive",  False)),
+        ("USD/KRW", sec.get("usdkrw_value", ""), sec.get("usdkrw_change", ""), sec.get("usdkrw_positive", False)),
+    ]
+    for label, val, ch, pos in overseas:
+        if val and ry + 88 < cy + CARD_H + 10:
+            ry = _draw_mini_index_row(draw, RX, ry, RIGHT_W,
+                                      label, val, ch or "", pos,
+                                      (100, 220, 220))
 
-    # ── 구분선 ───────────────────────────────────────────────────────
+    cy += CARD_H + 28
+
+    # ── 구분선 ──
     draw_divider(draw, cy, style="gradient")
-    cy += 28
+    cy += 24
 
-    # ── 오늘의 핵심 포인트 ────────────────────────────────────────────
+    # ── 핵심 포인트: 번호+텍스트 카드 ──
     if points:
+        # 타이틀
         draw.text((MARGIN_X, cy), "오늘의 핵심 포인트",
                   font=fnt(30, bold=True), fill=C["gold"])
         cy += 46
 
-        for i, point in enumerate(points[:5]):
-            if cy >= Y_MAX - 20: break
-            icon_colors = [C["gold"], C["green"], C["blue"], (220, 100, 220), C["red"]]
-            col = icon_colors[i % len(icon_colors)]
-            # 포인트 카드
-            ph = 72
-            draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + ph],
-                                    radius=10, fill=(15, 20, 52))
-            draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 5, cy + ph],
-                                    radius=0, fill=col)
+        icon_colors = [C["gold"], C["green"], C["blue"], (220, 100, 220), C["red"]]
+        col_count = 2
+        col_w = (W - MARGIN_X * 2 - 20) // col_count
+        pt_h  = 80
+
+        for i, point in enumerate(points[:6]):
+            if cy + pt_h > Y_MAX: break
+            col_idx = i % col_count
+            row_idx = i // col_count
+            px = MARGIN_X + col_idx * (col_w + 20)
+            py = cy + row_idx * (pt_h + 10)
+            if py + pt_h > Y_MAX: break
+
+            color = icon_colors[i % len(icon_colors)]
+            # 카드 배경
+            draw.rounded_rectangle([px, py, px + col_w, py + pt_h],
+                                    radius=12, fill=(12, 18, 52))
+            # 컬러 왼쪽 바
+            draw.rounded_rectangle([px, py, px + 5, py + pt_h],
+                                    radius=4, fill=color)
             # 번호 원
-            draw.ellipse([MARGIN_X + 14, cy + ph // 2 - 18,
-                          MARGIN_X + 50, cy + ph // 2 + 18],
-                         fill=col)
-            draw.text((MARGIN_X + 32, cy + ph // 2), str(i + 1),
-                      font=fnt(24, bold=True), fill=(10, 12, 35), anchor="mm")
+            draw.ellipse([px + 14, py + pt_h // 2 - 18,
+                          px + 50, py + pt_h // 2 + 18],
+                         fill=(*color, 40))
+            draw.ellipse([px + 14, py + pt_h // 2 - 18,
+                          px + 50, py + pt_h // 2 + 18],
+                         outline=color, width=2)
+            draw.text((px + 32, py + pt_h // 2), str(i + 1),
+                      font=fnt(24, bold=True), fill=color, anchor="mm")
+            # 텍스트
             draw_wrapped_text(draw, point,
-                              MARGIN_X + 64, cy + 12,
-                              W - MARGIN_X * 2 - 80,
-                              size=26, bold=False, color=C["white"], line_gap=8)
-            cy += ph + 10
+                              px + 60, py + 12, col_w - 72,
+                              size=24, bold=False, color=C["white"], line_gap=8)
 
     draw_bottombar(draw)
-    path = os.path.join(out_dir, "01_market_00.png")
-    return [_save(img, path)]
+    return [_save(img, os.path.join(out_dir, "01_market_00.png"))]
 
 
 # ── 업종 분석 ───────────────────────────────────────────────────────────────
@@ -311,28 +325,30 @@ def build_sector(data, out_dir):
     draw = ImageDraw.Draw(img)
     draw_topbar(draw, "핵심 업종 분석", color=(25, 12, 55))
 
-    sector_list = sec.get("sector_list", sec.get("sectors", sec.get("list", [])))
+    sector_list    = sec.get("sector_list", sec.get("sectors", sec.get("list", [])))
     corner_summary = sec.get("corner_summary", "")
 
     cy = 96
 
-    # 코너 요약
     if corner_summary:
-        draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 50],
-                                radius=25, fill=(30, 18, 65))
-        draw_wrapped_text(draw, f"  {corner_summary}",
-                          MARGIN_X + 20, cy + 10, W - MARGIN_X * 2 - 40,
-                          size=26, bold=False, color=C["gold"], line_gap=6)
-        cy += 66
+        draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 52],
+                                radius=10, fill=(30, 18, 65))
+        draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 5, cy + 52],
+                                radius=0, fill=C["gold"])
+        draw.text((MARGIN_X + 22, cy + 14), corner_summary,
+                  font=fnt(28, bold=False), fill=C["gold"])
+        cy += 68
 
-    # 섹터 카드 그리드
     palette = [
         C["gold"], C["green"], C["blue"],
         (220, 100, 220), C["red"], (100, 220, 220),
-        (255, 140, 60), (80, 200, 120)
     ]
-    card_w = (W - MARGIN_X * 2 - 40) // 2
-    card_h = 142
+    momentum_colors = {"상승": C["red"], "하락": C["blue"], "보합": C["gold"]}
+
+    # ── 섹터 카드: 2열 그리드, 카드 내부 정보 계층 강화 ──
+    col_count = 2
+    col_w = (W - MARGIN_X * 2 - 24) // col_count
+    card_h = 148
 
     for idx, sector in enumerate(sector_list[:6]):
         color = palette[idx % len(palette)]
@@ -343,48 +359,54 @@ def build_sector(data, out_dir):
         else:
             name = str(sector); desc = ""; momentum = ""
 
-        col    = idx % 2
-        row    = idx // 2
-        card_x = MARGIN_X + col * (card_w + 40)
-        card_y = cy + row * (card_h + 16)
+        col_i  = idx % col_count
+        row_i  = idx // col_count
+        card_x = MARGIN_X + col_i * (col_w + 24)
+        card_y = cy + row_i * (card_h + 14)
         if card_y + card_h > Y_MAX: break
 
         # 카드 배경
-        draw.rounded_rectangle([card_x, card_y, card_x + card_w, card_y + card_h],
-                                radius=16, fill=(18, 15, 52))
+        draw.rounded_rectangle([card_x, card_y, card_x + col_w, card_y + card_h],
+                                radius=18, fill=(15, 12, 48))
         # 상단 컬러 바
-        draw.rounded_rectangle([card_x, card_y, card_x + card_w, card_y + 6],
+        draw.rounded_rectangle([card_x, card_y, card_x + col_w, card_y + 5],
                                 radius=4, fill=color)
-        # 왼쪽 강조선
-        draw.rounded_rectangle([card_x, card_y, card_x + 5, card_y + card_h],
-                                radius=4, fill=(*color, 150))
 
-        # 아이콘 원 배경
-        draw.ellipse([card_x + 18, card_y + 20, card_x + 56, card_y + 58],
-                     fill=(*color, 40))
-        # 번호
-        draw.text((card_x + 37, card_y + 39), str(idx + 1),
-                  font=fnt(24, bold=True), fill=color, anchor="mm")
+        # 번호 원 (좌측)
+        cx_icon = card_x + 40
+        cy_icon = card_y + 44
+        draw.ellipse([cx_icon - 26, cy_icon - 26, cx_icon + 26, cy_icon + 26],
+                     fill=(*color, 45))
+        draw.ellipse([cx_icon - 26, cy_icon - 26, cx_icon + 26, cy_icon + 26],
+                     outline=color, width=2)
+        draw.text((cx_icon, cy_icon), str(idx + 1),
+                  font=fnt(26, bold=True), fill=color, anchor="mm")
 
-        # 종목명
-        draw.text((card_x + 70, card_y + 18), name,
-                  font=fnt(34, bold=True), fill=C["white"])
+        # 섹터명
+        draw.text((card_x + 80, card_y + 18), name,
+                  font=fnt(36, bold=True), fill=C["white"])
 
-        # 모멘텀 배지
+        # 모멘텀 배지 (우측 상단)
         if momentum:
-            mom_colors = {"상승": C["red"], "하락": C["blue"], "보합": C["gold"]}
-            mom_col = mom_colors.get(momentum, C["gold"])
-            draw.rounded_rectangle([card_x + card_w - 80, card_y + 14,
-                                     card_x + card_w - 12, card_y + 46],
-                                    radius=16, fill=(*mom_col, 40))
-            draw.text((card_x + card_w - 46, card_y + 30), momentum,
-                      font=fnt(20, bold=True), fill=mom_col, anchor="mm")
+            mom_col = momentum_colors.get(momentum, C["gold"])
+            try:
+                mw = int(draw.textlength(momentum, font=fnt(22, bold=True))) + 24
+            except Exception:
+                mw = 80
+            mx = card_x + col_w - mw - 12
+            my = card_y + 16
+            draw.rounded_rectangle([mx, my, mx + mw, my + 36],
+                                    radius=18, fill=(*mom_col, 40))
+            draw.rounded_rectangle([mx, my, mx + mw, my + 36],
+                                    radius=18, outline=mom_col, width=1)
+            draw.text((mx + mw // 2, my + 18), momentum,
+                      font=fnt(22, bold=True), fill=mom_col, anchor="mm")
 
-        # 설명
+        # 설명 텍스트
         if desc:
             draw_wrapped_text(draw, desc,
-                              card_x + 22, card_y + 68,
-                              card_w - 40, size=24,
+                              card_x + 80, card_y + 66,
+                              col_w - 96, size=24,
                               color=(170, 175, 215), line_gap=8)
 
     draw_bottombar(draw)
@@ -394,32 +416,30 @@ def build_sector(data, out_dir):
 # ── 종목 요약 슬라이드 ──────────────────────────────────────────────────────
 
 def _build_stock_summary(sec, out_path, img_dir):
-    stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    price      = sec.get("price", "")
-    change     = sec.get("change", "")
-    positive   = sec.get("change_positive", True)
-    summary    = sec.get("summary", "")
-    catalysts  = sec.get("catalysts", [])
-    risks      = sec.get("risks", [])
+    stock_name   = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
+    price        = sec.get("price", "")
+    change       = sec.get("change", "")
+    positive     = sec.get("change_positive", True)
+    summary      = sec.get("summary", "")
+    catalysts    = sec.get("catalysts", [])
+    risks        = sec.get("risks", [])
     corner_summary = sec.get("corner_summary", "")
-
-    is_hidden  = sec.get("id", "").startswith("hidden_")
-    theme      = "purple" if is_hidden else "default"
+    is_hidden    = sec.get("id", "").startswith("hidden_")
+    theme        = "purple" if is_hidden else "default"
 
     img  = new_frame(theme=theme)
     draw = ImageDraw.Draw(img)
-
     bar_label = "숨은 종목 분석" if is_hidden else "종목 분석"
     bar_color = (35, 12, 65) if is_hidden else None
     draw_topbar(draw, f"{bar_label}: {stock_name}", color=bar_color)
 
-    # ── 뉴스 이미지 (우측 상단 원형 프레임) ─────────────────────────
+    # ── 뉴스 이미지 (우측 상단, 원형 마스크) ──────────────────────────
     img_path = fetch_news_image(stock_name, img_dir, [])
     if img_path:
         try:
-            logo_size = 200
-            logo_x = W - MARGIN_X - logo_size
-            logo_y = 90
+            logo_size = 180
+            logo_x    = W - MARGIN_X - logo_size
+            logo_y    = 96
             mask = Image.new("L", (logo_size, logo_size), 0)
             mdraw = ImageDraw.Draw(mask)
             mdraw.ellipse([0, 0, logo_size, logo_size], fill=255)
@@ -443,100 +463,100 @@ def _build_stock_summary(sec, out_path, img_dir):
     else:
         draw = ImageDraw.Draw(img)
 
-    # ── 종목명 + 요약 ────────────────────────────────────────────────
-    NAME_Y = 90
+    # ── 상단 히어로 영역: 종목명 + 가격 + 신호 ──────────────────────
+    HERO_Y = 96
 
     # 숨은 종목 배지
     if is_hidden:
-        draw.rounded_rectangle([MARGIN_X, NAME_Y - 4, MARGIN_X + 140, NAME_Y + 38],
+        draw.rounded_rectangle([MARGIN_X, HERO_Y, MARGIN_X + 140, HERO_Y + 38],
                                 radius=19, fill=C.get("hidden_accent", (80, 30, 120)))
-        draw.text((MARGIN_X + 70, NAME_Y + 17), "숨은 종목",
+        draw.text((MARGIN_X + 70, HERO_Y + 19), "숨은 종목",
                   font=fnt(24, bold=True), fill=C["white"], anchor="mm")
-        NAME_Y += 50
+        HERO_Y += 46
 
-    draw_glow_text(draw, (MARGIN_X, NAME_Y), stock_name,
-                   font=fnt(74, bold=True), fill=C["white"],
+    # 종목명 (대형 글로우)
+    draw_glow_text(draw, (MARGIN_X, HERO_Y), stock_name,
+                   font=fnt(78, bold=True), fill=C["white"],
                    glow_color=C["gold"], glow_radius=3)
 
-    # 코너 요약
-    SUMMARY_Y = NAME_Y + 88
-    if corner_summary:
-        draw.rounded_rectangle([MARGIN_X, SUMMARY_Y, W - 300, SUMMARY_Y + 44],
-                                radius=22, fill=(20, 28, 72))
-        draw_wrapped_text(draw, f"  ★ {corner_summary}",
-                          MARGIN_X + 16, SUMMARY_Y + 8,
-                          W - 360, size=26, bold=False, color=C["gold"], line_gap=8)
-        SUMMARY_Y += 58
-
-    elif summary:
-        draw_wrapped_text(draw, summary,
-                          MARGIN_X, SUMMARY_Y, W - 360,
-                          size=30, bold=False, color=(180, 185, 220), line_gap=12)
-        SUMMARY_Y += 48
-
-    # ── 주가 + 등락률 ────────────────────────────────────────────────
-    PRICE_Y = SUMMARY_Y + 16
+    # 가격 + 등락
+    PRICE_Y = HERO_Y + 90
     if price:
         draw.text((MARGIN_X, PRICE_Y), f"₩ {price}",
-                  font=fnt(60, bold=True), fill=C["gold"])
+                  font=fnt(56, bold=True), fill=C["gold"])
         if change:
             try:
-                px = MARGIN_X + int(draw.textlength(f"₩ {price}", font=fnt(60, bold=True))) + 24
+                px = MARGIN_X + int(draw.textlength(f"₩ {price}", font=fnt(56, bold=True))) + 20
             except Exception:
-                px = MARGIN_X + len(f"₩ {price}") * 32 + 24
+                px = MARGIN_X + len(f"₩ {price}") * 30 + 20
             ch_color = C["red"] if positive else C["blue"]
             arrow = "▲" if positive else "▼"
-            # 등락 배지
-            ch_text = f" {arrow} {change} "
-            try: chw = int(draw.textlength(ch_text, font=fnt(36, bold=True))) + 20
-            except Exception: chw = 120
-            draw.rounded_rectangle([px - 10, PRICE_Y + 12,
-                                     px + chw, PRICE_Y + 56],
-                                    radius=12, fill=(*ch_color, 30))
-            draw.text((px, PRICE_Y + 18), f"{arrow} {change}",
-                      font=fnt(36, bold=True), fill=ch_color)
+            try:
+                chw = int(draw.textlength(f"{arrow} {change}", font=fnt(32, bold=True))) + 24
+            except Exception:
+                chw = 120
+            draw.rounded_rectangle([px, PRICE_Y + 8, px + chw, PRICE_Y + 52],
+                                    radius=10, fill=(*ch_color, 35))
+            draw.rounded_rectangle([px, PRICE_Y + 8, px + chw, PRICE_Y + 52],
+                                    radius=10, outline=ch_color, width=1)
+            draw.text((px + 12, PRICE_Y + 14), f"{arrow} {change}",
+                      font=fnt(32, bold=True), fill=ch_color)
 
-    # ── 구분선 ───────────────────────────────────────────────────────
-    DIVIDER_Y = H // 2 - 10
-    draw_divider(draw, DIVIDER_Y, style="gradient")
+    # 한줄 요약 (코너 요약 또는 summary)
+    SUMMARY_Y = PRICE_Y + 66
+    summary_text = corner_summary or summary
+    if summary_text:
+        # 배경 배너
+        draw.rounded_rectangle([MARGIN_X, SUMMARY_Y, W - 260, SUMMARY_Y + 48],
+                                radius=10, fill=(14, 22, 60))
+        draw.rounded_rectangle([MARGIN_X, SUMMARY_Y, MARGIN_X + 5, SUMMARY_Y + 48],
+                                radius=0, fill=C["gold"])
+        draw_wrapped_text(draw, f"  {summary_text}",
+                          MARGIN_X + 16, SUMMARY_Y + 9,
+                          W - 280, size=26, bold=False,
+                          color=(210, 215, 240), line_gap=8)
 
-    # ── 투자 포인트 & 리스크 (하단 2분할) ─────────────────────────────
-    CARD_Y = DIVIDER_Y + 30
-    half_w = (W - MARGIN_X * 2 - 60) // 2
+    # ── 구분선 ──
+    DIV_Y = H // 2 + 10
+    draw_divider(draw, DIV_Y, style="gradient")
 
-    # 투자 포인트
+    # ── 하단 2분할: 투자 포인트(좌) / 리스크(우) ──────────────────────
+    LOWER_Y = DIV_Y + 24
+    half_w  = (W - MARGIN_X * 2 - 32) // 2
+
+    # 투자 포인트 섹션
     if catalysts:
-        draw.rounded_rectangle([MARGIN_X, CARD_Y,
-                                  MARGIN_X + half_w, CARD_Y + 30],
-                                radius=6, fill=C["red"])
-        draw.text((MARGIN_X + 12, CARD_Y + 4), "▶ 투자 포인트",
-                  font=fnt(28, bold=True), fill=C["white"])
-        ty = CARD_Y + 46
+        # 섹션 타이틀 바
+        draw.rounded_rectangle([MARGIN_X, LOWER_Y, MARGIN_X + half_w, LOWER_Y + 36],
+                                radius=8, fill=(*C["red"], 200))
+        draw.text((MARGIN_X + 14, LOWER_Y + 5), "▶  투자 포인트",
+                  font=fnt(26, bold=True), fill=C["white"])
+        ty = LOWER_Y + 48
         for cat in catalysts[:4]:
-            if ty >= Y_MAX - 10: break
-            draw.ellipse([MARGIN_X + 8, ty + 8, MARGIN_X + 22, ty + 22],
+            if ty >= Y_MAX - 8: break
+            # 불릿
+            draw.ellipse([MARGIN_X + 10, ty + 8, MARGIN_X + 22, ty + 20],
                          fill=C["red"])
             ty = draw_wrapped_text(draw, f"   {cat}",
                                    MARGIN_X, ty, half_w,
-                                   size=26, line_gap=12, color=C["white"])
+                                   size=25, line_gap=10, color=(230, 235, 255))
             ty += 4
 
-    # 리스크
+    # 리스크 섹션
     if risks:
-        rx = MARGIN_X + half_w + 60
-        draw.rounded_rectangle([rx, CARD_Y,
-                                  rx + half_w, CARD_Y + 30],
-                                radius=6, fill=C["blue"])
-        draw.text((rx + 12, CARD_Y + 4), "▶ 리스크",
-                  font=fnt(28, bold=True), fill=C["white"])
-        ty = CARD_Y + 46
+        rx = MARGIN_X + half_w + 32
+        draw.rounded_rectangle([rx, LOWER_Y, rx + half_w, LOWER_Y + 36],
+                                radius=8, fill=(*C["blue"], 200))
+        draw.text((rx + 14, LOWER_Y + 5), "▶  리스크",
+                  font=fnt(26, bold=True), fill=C["white"])
+        ty = LOWER_Y + 48
         for risk in risks[:4]:
-            if ty >= Y_MAX - 10: break
-            draw.ellipse([rx + 8, ty + 8, rx + 22, ty + 22],
+            if ty >= Y_MAX - 8: break
+            draw.ellipse([rx + 10, ty + 8, rx + 22, ty + 20],
                          fill=C["blue"])
             ty = draw_wrapped_text(draw, f"   {risk}",
                                    rx, ty, half_w,
-                                   size=26, line_gap=12, color=C["white"])
+                                   size=25, line_gap=10, color=(230, 235, 255))
             ty += 4
 
     draw_bottombar(draw, stock_name)
@@ -562,7 +582,6 @@ def _build_stock_chart(sec, out_path, img_dir):
     if chart_path:
         _paste_fill(img, chart_path, (0, 82, W, CHART_BOTTOM))
     else:
-        # 차트 데이터 없을 때 안내 메시지
         draw.rounded_rectangle([MARGIN_X, H // 2 - 60, W - MARGIN_X, H // 2 + 60],
                                 radius=16, fill=(18, 30, 22))
         draw.text((CX, H // 2), f"{stock_name} 차트 데이터 준비 중",
@@ -621,7 +640,7 @@ def _build_mention_page(sec, out_path, page_idx):
     cy = 96
     n  = max(len(page_mentions), 1)
     avail_h = Y_MAX - cy - 20
-    card_h  = min(240, (avail_h - 20 * n) // n)
+    card_h  = min(250, (avail_h - 20 * n) // n)
 
     mention_colors = [C["gold"], C["green"], C["blue"]]
 
@@ -630,44 +649,53 @@ def _build_mention_page(sec, out_path, page_idx):
         if isinstance(m, str):
             m = {"speaker": "", "channel": "", "quote_subtitle": m}
 
-        speaker = m.get("speaker", "").strip()
-        channel = m.get("channel", m.get("source", "")).strip()
-        header  = f"{channel}  |  {speaker}" if speaker else channel
-        content = m.get("quote_subtitle", m.get("quote", m.get("content", "")))
-
+        speaker  = m.get("speaker", "").strip()
+        channel  = m.get("channel", m.get("source", "")).strip()
+        content  = m.get("quote_subtitle", m.get("quote", m.get("content", "")))
         accent_col = mention_colors[mi % len(mention_colors)]
         actual_h   = min(card_h, Y_MAX - cy)
 
-        # 카드 배경 (그라디언트 느낌)
+        # 카드 배경
         draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + actual_h],
-                                radius=18, fill=(16, 18, 50))
+                                radius=18, fill=(14, 16, 46))
         # 왼쪽 강조 바
         draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 7, cy + actual_h],
                                 radius=4, fill=accent_col)
         # 상단 하이라이트
         draw.line([MARGIN_X + 18, cy + 1, W - MARGIN_X - 18, cy + 1],
-                  fill=(*accent_col, 40), width=1)
+                  fill=(*accent_col, 35), width=1)
 
-        # 채널 헤더 (배지 스타일)
-        draw.rounded_rectangle([MARGIN_X + 22, cy + 14,
-                                  MARGIN_X + 22 + min(len(header) * 16 + 24, 500),
-                                  cy + 50],
-                                radius=18, fill=(*accent_col, 35))
-        draw.text((MARGIN_X + 34, cy + 32), header,
-                  font=fnt(26, bold=True), fill=accent_col, anchor="lm")
+        # 채널/발화자 배지
+        header_parts = []
+        if channel:
+            header_parts.append(channel)
+        if speaker:
+            header_parts.append(speaker)
+        header = "  |  ".join(header_parts)
 
-        # 인용부호 장식
-        draw.text((W - MARGIN_X - 70, cy + 14), "❝",
-                  font=fnt(48, bold=False), fill=(*accent_col, 60))
+        if header:
+            try:
+                hw = int(draw.textlength(header, font=fnt(26, bold=True))) + 32
+            except Exception:
+                hw = min(len(header) * 14 + 32, 600)
+            draw.rounded_rectangle([MARGIN_X + 18, cy + 12,
+                                     MARGIN_X + 18 + hw, cy + 48],
+                                    radius=18, fill=(*accent_col, 38))
+            draw.text((MARGIN_X + 34, cy + 30), header,
+                      font=fnt(26, bold=True), fill=accent_col, anchor="lm")
 
-        # 내용
+        # 인용부호 장식 (우측)
+        draw.text((W - MARGIN_X - 56, cy + 10), "\u275d",
+                  font=fnt(44, bold=False), fill=(*accent_col, 55))
+
+        # 내용 텍스트
         if content:
             draw_wrapped_text(draw, content,
-                              MARGIN_X + 28, cy + 62,
+                              MARGIN_X + 28, cy + 60,
                               W - MARGIN_X * 2 - 56,
                               size=28, color=C["white"], line_gap=14)
 
-        cy += actual_h + 20
+        cy += actual_h + 18
 
     draw_bottombar(draw, stock_name)
     return _save(img, out_path)
@@ -707,7 +735,7 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
     return paths
 
 
-# ── AI 전략 ─────────────────────────────────────────────────────────────────
+# ── AI 투자 전략 ────────────────────────────────────────────────────────────
 
 def build_ai_strategy(data, out_dir):
     sec  = _find_section(data.get("sections", []), "ai_strategy")
@@ -720,45 +748,52 @@ def build_ai_strategy(data, out_dir):
 
     cy = 96
 
-    # 상단 타이틀 영역
-    draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 80],
-                            radius=14, fill=(22, 15, 58))
-    draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 6, cy + 80],
+    # 헤더 카드
+    draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 82],
+                            radius=14, fill=(18, 12, 52))
+    draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 6, cy + 82],
                             radius=4, fill=C["gold"])
 
-    # AI 아이콘 느낌 텍스트
-    draw.text((MARGIN_X + 28, cy + 14), "AI",
-              font=fnt(52, bold=True), fill=C["gold"])
-    draw.text((MARGIN_X + 100, cy + 14), "오늘의 투자 전략 제안",
-              font=fnt(36, bold=True), fill=C["white"])
+    # AI 배지
+    draw.rounded_rectangle([MARGIN_X + 20, cy + 16,
+                             MARGIN_X + 84, cy + 66],
+                            radius=10, fill=(*C["gold"], 30))
+    draw.rounded_rectangle([MARGIN_X + 20, cy + 16,
+                             MARGIN_X + 84, cy + 66],
+                            radius=10, outline=C["gold"], width=1)
+    draw.text((MARGIN_X + 52, cy + 41), "AI",
+              font=fnt(36, bold=True), fill=C["gold"], anchor="mm")
 
+    draw.text((MARGIN_X + 100, cy + 18), "오늘의 투자 전략 제안",
+              font=fnt(34, bold=True), fill=C["white"])
     if corner_summary:
-        draw.text((MARGIN_X + 100, cy + 52), corner_summary,
-                  font=fnt(24, bold=False), fill=(170, 175, 215))
+        draw.text((MARGIN_X + 100, cy + 54), corner_summary,
+                  font=fnt(24, bold=False), fill=(160, 168, 210))
 
-    cy += 104
+    cy += 102
 
     # 전략 카드 목록
-    card_h = 108
+    card_h = 104
     strategy_colors = [C["gold"], C["green"], C["blue"],
                        (220, 100, 220), C["red"], (100, 200, 220)]
 
     for i, bp in enumerate(bullet_points[:6]):
         if cy + card_h > Y_MAX: break
-        text   = bp if isinstance(bp, str) else bp.get("strategy", bp.get("content", str(bp)))
-        color  = strategy_colors[i % len(strategy_colors)]
+        text  = bp if isinstance(bp, str) else bp.get("strategy", bp.get("content", str(bp)))
+        color = strategy_colors[i % len(strategy_colors)]
 
         draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + card_h],
-                                radius=14, fill=(18, 14, 48))
+                                radius=14, fill=(15, 12, 44))
+        # 왼쪽 강조 바
         draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 6, cy + card_h],
                                 radius=4, fill=color)
 
         # 번호 배지
         draw.ellipse([MARGIN_X + 18, cy + card_h // 2 - 24,
                       MARGIN_X + 66, cy + card_h // 2 + 24],
-                     fill=(*color, 50))
-        draw.ellipse([MARGIN_X + 20, cy + card_h // 2 - 22,
-                      MARGIN_X + 64, cy + card_h // 2 + 22],
+                     fill=(*color, 45))
+        draw.ellipse([MARGIN_X + 18, cy + card_h // 2 - 24,
+                      MARGIN_X + 66, cy + card_h // 2 + 24],
                      outline=color, width=2)
         draw.text((MARGIN_X + 42, cy + card_h // 2), str(i + 1),
                   font=fnt(28, bold=True), fill=color, anchor="mm")
@@ -766,15 +801,15 @@ def build_ai_strategy(data, out_dir):
         # 내용
         if " — " in text:
             stock_part, strat_part = text.split(" — ", 1)
-            draw.text((MARGIN_X + 82, cy + 18), stock_part.strip(),
+            draw.text((MARGIN_X + 82, cy + 16), stock_part.strip(),
                       font=fnt(30, bold=True), fill=color)
             draw_wrapped_text(draw, strat_part.strip(),
-                              MARGIN_X + 82, cy + 58,
+                              MARGIN_X + 82, cy + 54,
                               W - MARGIN_X * 2 - 100,
                               size=26, color=C["white"], line_gap=8)
         else:
             draw_wrapped_text(draw, text,
-                              MARGIN_X + 82, cy + 26,
+                              MARGIN_X + 82, cy + 24,
                               W - MARGIN_X * 2 - 100,
                               size=28, color=C["white"], line_gap=10)
 
@@ -784,13 +819,12 @@ def build_ai_strategy(data, out_dir):
     return _save(img, os.path.join(out_dir, "98_ai_strategy.png"))
 
 
-# ── 클로징 (투자 경고 강화) ────────────────────────────────────────────────
+# ── 클로징 ─────────────────────────────────────────────────────────────────
 
 def build_closing(data, out_dir):
     sec        = _find_section(data.get("sections", []), "closing")
     img        = new_frame(theme="default")
     draw       = ImageDraw.Draw(img)
-    disclaimer = sec.get("disclaimer", "")
 
     # 중앙 글로우
     glow_img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
@@ -805,7 +839,6 @@ def build_closing(data, out_dir):
     img = Image.alpha_composite(img.convert("RGBA"), glow_img).convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    # KBS 머니올라 로고 배지
     badge_y = H // 2 - 260
     badge_w, badge_h = 380, 64
     draw.rounded_rectangle([CX - badge_w // 2, badge_y,
@@ -824,17 +857,15 @@ def build_closing(data, out_dir):
               font=fnt(42, bold=False), fill=C["gold"], anchor="mm")
     cy += 56
 
-    # 구분선
     draw.line([CX - 280, cy, CX + 280, cy], fill=C["gold"], width=2)
     cy += 24
 
-    # 투자 경고 박스
     warn_h = 170
     draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + warn_h],
                             radius=14, fill=(40, 10, 10))
     draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + warn_h],
                             radius=14, outline=(180, 40, 40), width=2)
-    draw.text((MARGIN_X + 24, cy + 14), "⚠ 투자 유의사항",
+    draw.text((MARGIN_X + 24, cy + 14), "투자 유의사항",
               font=fnt(30, bold=True), fill=(220, 80, 80))
 
     warning_lines = [
