@@ -142,12 +142,47 @@ def generate_script(briefing_text: str) -> dict:
 증권 브리핑 데이터를 바탕으로 **15분짜리** 방송 스크립트를 JSON 형식으로 작성하세요.
 작성일: {TODAY}
 
-## ★ 15분 영상 설계 원칙 (필수)
-- 전체 나레이션 분량: 15분 기준으로 충분히 길어야 하며, 오프닝/시장/섹터/종목/전략/클로징을 합쳐 방송 길이가 14분 30초~15분 30초에 수렴하도록 작성합니다.
-- 각 코너(섹션)마다 **한 문장으로 간략한 요약 오프닝** 포함 → 시청자가 '지금 뭘 보는지' 즉시 파악
-- 종목 수가 많을 경우 **시청자 관심이 높은 핵심 종목 5~8개만** 선별하여 집중
-- 유튜브/방송에서 출연진이 직접 언급한 멘트(mentions)는 **반드시 포함**
-- 브리핑 데이터의 섹션 순서를 그대로 유지
+## ★ 15분 영상 분량 설계 (반드시 준수)
+한국어 TTS 낭독 속도 기준: 1분 = 약 250자
+전체 목표: 오프닝+클로징 고정 텍스트 포함 총 3,750자 이상
+
+### 섹션별 narration 목표 글자 수 (공백 포함):
+- market_summary : 550자 이상 (약 2분 10초)
+  → 코스피·코스닥·미국 3대 지수·환율 수치를 모두 언급하고,
+    오늘 시장의 주요 흐름과 배경을 구체적으로 설명합니다.
+
+- sectors : 500자 이상 (약 2분)
+  → hot_sectors 5개 섹터 각각 2~3문장으로 설명합니다.
+    단순 나열이 아닌, 왜 오늘 주목받는지 이유까지 설명합니다.
+
+- stock_[market_leader 1번] : 400자 이상 (약 1분 30초)
+  → summary + catalyst + risk + mentions 전부 포함.
+    mentions는 채널명을 호명하며 구어체로 전달합니다.
+
+- stock_[market_leader 2번] : 400자 이상 (약 1분 30초)
+  → 위와 동일.
+
+- stock_[stocks 상위 3개, weighted_score 높은 순] : 각 300자 이상 (각 약 1분 10초)
+  → summary + catalyst + 핵심 mention 1개 포함.
+
+- stock_[stocks 하위 종목들] : 전체 묶어서 300자 이상 (약 1분 10초)
+  → "다음은 오늘의 추가 관심 종목입니다."로 시작하여
+    남은 종목들을 종목당 1~2문장으로 빠르게 소개합니다.
+    (hidden_picks가 비어 있으면 이 섹션은 생략합니다.)
+
+- ai_strategy : 400자 이상 (약 1분 30초)
+  → 핵심 시나리오 + 섹터 로테이션 전략을 구체적으로 설명합니다.
+
+### 분량 검증 규칙:
+- 각 섹션 narration을 작성한 뒤 글자 수를 스스로 확인하세요.
+- 목표치에 미달하면 반드시 추가 설명을 붙여 목표치를 채우세요.
+- "간략히", "짧게", "요약하면" 같은 표현으로 내용을 줄이지 마세요.
+
+## ★ 종목 선별 기준
+- market_leaders (2개): 반드시 모두 포함, 충실히 설명
+- stocks: weighted_score 상위 3개는 개별 섹션으로 충실히 설명
+- stocks: 나머지는 하나의 섹션에 묶어 빠르게 소개
+- hidden_picks: 데이터가 비어 있으면 완전 제외
 
 ## ★ 종목 목록 매핑
 {STOCK_NAME_LIST}
@@ -294,7 +329,8 @@ def generate_script(briefing_text: str) -> dict:
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": (
                 "다음 브리핑 데이터를 바탕으로 15분 분량의 KBS 머니올라 방송 스크립트를 작성해주세요.\n"
-                "시청자들이 가장 관심있어할 핵심 내용을 중심으로 선별하고, "
+                "반드시 각 섹션의 목표 글자 수를 채워야 합니다. 분량이 부족하면 배경 설명, 시장 맥락, "
+                "투자자 유의사항 등을 추가하여 목표치를 맞춰주세요.\n"
                 "유튜브 출연진 멘트를 반드시 포함시켜 주세요.\n\n"
                 f"{briefing_text}"
             )}
@@ -320,7 +356,30 @@ def generate_script(briefing_text: str) -> dict:
             return [_replace(v) for v in obj]
         return obj
 
-    return _replace(data)
+    data = _replace(data)
+
+    # ── 분량 검증 로그 ──────────────────────────────────────────────────────
+    sections = data.get("sections", [])
+    total_chars = 0
+    print("\n📏 섹션별 narration 글자 수:")
+    for sec in sections:
+        sid = sec.get("id", "")
+        # narration 필드가 여러 이름으로 존재할 수 있음
+        narr = (
+            sec.get("narration")
+            or (sec.get("narration_summary", "") + sec.get("narration_chart", "") + sec.get("narration_mention", ""))
+        )
+        chars = len(narr) if narr else 0
+        total_chars += chars
+        print(f"  {sid}: {chars:,}자")
+    print(f"  ─────────────────")
+    print(f"  합계: {total_chars:,}자  (목표: 3,750자 이상)")
+    if total_chars < 3750:
+        print(f"  ⚠️  분량 부족! {3750 - total_chars:,}자 미달")
+    else:
+        print(f"  ✅ 분량 목표 달성")
+
+    return data
 
 
 # ─────────────────────────────────────────────────────────────────────────────
