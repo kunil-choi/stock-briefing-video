@@ -136,7 +136,7 @@ def fetch_briefing():
 # 스크립트 생성
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_script(briefing_text: str) -> dict:
+def generate_script(briefing_text: str, market_data: dict = None) -> dict:
     system_prompt = f"""
 너는 KBS 머니올라 주식 방송 스크립트 작성 전문가입니다.
 증권 브리핑 데이터를 바탕으로 **15분짜리** 방송 스크립트를 JSON 형식으로 작성하세요.
@@ -269,6 +269,16 @@ def generate_script(briefing_text: str) -> dict:
       "kospi_change_positive": false,
       "kosdaq_value": "966",
       "kosdaq_change": "-3.43%",
+      "kosdaq_change_positive": false,
+      "nasdaq_value": "19,864",
+      "nasdaq_change": "-0.24%",
+      "nasdaq_positive": false,
+      "sp500_value": "5,528",
+      "sp500_change": "-0.05%",
+      "sp500_positive": false,
+      "usdkrw_value": "1,380",
+      "usdkrw_change": "-0.74%",
+      "usdkrw_positive": false,
       "points": ["포인트1", "포인트2", "포인트3"]
     }},
     {{
@@ -332,7 +342,10 @@ def generate_script(briefing_text: str) -> dict:
                 "반드시 각 섹션의 목표 글자 수를 채워야 합니다. 분량이 부족하면 배경 설명, 시장 맥락, "
                 "투자자 유의사항 등을 추가하여 목표치를 맞춰주세요.\n"
                 "유튜브 출연진 멘트를 반드시 포함시켜 주세요.\n\n"
-                f"{briefing_text}"
+                + (f"## 실시간 시장 지표 (market_summary JSON 필드에 그대로 사용하세요)\n"
+                   f"{json.dumps(market_data, ensure_ascii=False, indent=2)}\n\n"
+                   if market_data else "")
+                + briefing_text
             )}
         ],
         response_format={"type": "json_object"},
@@ -393,7 +406,46 @@ def run(lang: str = "KO"):
 
     print(f"✅ 브리핑 텍스트 수신 완료 ({len(briefing_text):,}자)")
 
-    script = generate_script(briefing_text)
+    # briefing_data.json에서 market_data 직접 로드 (해외 지수/환율 포함)
+    market_data = None
+    try:
+        import urllib.request
+        url = "https://kunil-choi.github.io/stock-briefing-v3/data/briefing_data.json"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            raw_json = json.loads(resp.read().decode("utf-8"))
+        md = raw_json.get("market_data", {})
+
+        def _fmt_value(v):
+            if v is None: return ""
+            return f"{v:,.2f}" if isinstance(v, float) else str(v)
+
+        def _fmt_change(pct, direction):
+            if pct is None: return ""
+            sign = "+" if direction == "up" else ("-" if direction == "down" else "")
+            return f"{sign}{abs(pct):.2f}%"
+
+        market_data = {
+            "kospi_value":        _fmt_value(md.get("kospi", {}).get("value")),
+            "kospi_change":       _fmt_change(md.get("kospi", {}).get("change_pct"), md.get("kospi", {}).get("direction")),
+            "kospi_change_positive": md.get("kospi", {}).get("direction") == "up",
+            "kosdaq_value":       _fmt_value(md.get("kosdaq", {}).get("value")),
+            "kosdaq_change":      _fmt_change(md.get("kosdaq", {}).get("change_pct"), md.get("kosdaq", {}).get("direction")),
+            "kosdaq_change_positive": md.get("kosdaq", {}).get("direction") == "up",
+            "nasdaq_value":       _fmt_value(md.get("nasdaq", {}).get("value")),
+            "nasdaq_change":      _fmt_change(md.get("nasdaq", {}).get("change_pct"), md.get("nasdaq", {}).get("direction")),
+            "nasdaq_positive":    md.get("nasdaq", {}).get("direction") == "up",
+            "sp500_value":        _fmt_value(md.get("sp500", {}).get("value")),
+            "sp500_change":       _fmt_change(md.get("sp500", {}).get("change_pct"), md.get("sp500", {}).get("direction")),
+            "sp500_positive":     md.get("sp500", {}).get("direction") == "up",
+            "usdkrw_value":       _fmt_value(md.get("usd_krw", {}).get("value")),
+            "usdkrw_change":      _fmt_change(md.get("usd_krw", {}).get("change_pct"), md.get("usd_krw", {}).get("direction")),
+            "usdkrw_positive":    md.get("usd_krw", {}).get("direction") == "up",
+        }
+        print(f"✅ market_data 로드 완료: KOSPI {market_data['kospi_value']} / NASDAQ {market_data['nasdaq_value']} / USD/KRW {market_data['usdkrw_value']}")
+    except Exception as e:
+        print(f"⚠️ market_data 로드 실패 (briefing_data.json): {e} → 수치 없이 진행")
+
+    script = generate_script(briefing_text, market_data)
 
     root     = os.path.join(_HERE, "..")
     out_dir  = os.path.join(root, "output", lang, "scripts")
@@ -411,3 +463,4 @@ def run(lang: str = "KO"):
 if __name__ == "__main__":
     lang = sys.argv[1] if len(sys.argv) > 1 else "KO"
     run(lang)
+
