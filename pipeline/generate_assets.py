@@ -14,9 +14,15 @@ from assets.builders import (
     build_market_summary,
     build_sector,
     build_stock_cards,
+    build_extra_watchlist,
+    build_today_pick,
+    build_brokerage_report,
     build_ai_strategy,
     build_closing,
 )
+
+# summary+chart+mention 개별 카드가 아니라 단일 슬라이드로 렌더링되는 집계형 종목 섹션
+AGGREGATE_STOCK_SECTION_IDS = {"stock_추가관심종목", "stock_오늘의픽", "stock_증권사리포트"}
 
 
 def run(lang: str = "KO"):
@@ -48,7 +54,8 @@ def run(lang: str = "KO"):
 
     stock_secs = [
         s for s in sections
-        if s.get("id", "").startswith("stock_") or s.get("id", "").startswith("hidden_")
+        if (s.get("id", "").startswith("stock_") or s.get("id", "").startswith("hidden_"))
+        and s.get("id", "") not in AGGREGATE_STOCK_SECTION_IDS
     ]
     for i, sec in enumerate(stock_secs):
         sec_id = sec.get("id", f"stock_{i}")
@@ -57,6 +64,11 @@ def run(lang: str = "KO"):
         prefix = f"{10 + i:02d}_{name}"
         frames = build_stock_cards(sec, out_dir, img_dir, prefix)
         asset_map["frames"].extend(frames)
+
+    for builder in (build_extra_watchlist, build_today_pick, build_brokerage_report):
+        frame = builder(data, out_dir)
+        if frame:
+            asset_map["frames"].append(frame)
 
     asset_map["frames"].append(build_ai_strategy(data, out_dir))
     asset_map["frames"].append(build_closing(data, out_dir))

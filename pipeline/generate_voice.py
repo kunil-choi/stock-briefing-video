@@ -50,6 +50,9 @@ def text_to_speech(text: str, output_path: str) -> bool:
         return False
 
 
+AGGREGATE_STOCK_SECTION_IDS = {"stock_추가관심종목", "stock_오늘의픽", "stock_증권사리포트"}
+
+
 def _build_jobs(sections: list, lang: str) -> list:
     jobs = []
     audio_base = f"output/{lang}/audio"
@@ -60,7 +63,10 @@ def _build_jobs(sections: list, lang: str) -> list:
         if not sid:
             continue
 
-        is_stock = sid.startswith("stock_") or sid.startswith("hidden_")
+        is_stock = (
+            (sid.startswith("stock_") or sid.startswith("hidden_"))
+            and sid not in AGGREGATE_STOCK_SECTION_IDS
+        )
 
         if is_stock:
             text = section.get("narration_summary", section.get("narration", ""))

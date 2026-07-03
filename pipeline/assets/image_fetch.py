@@ -67,7 +67,7 @@ def _search_kbs(stock_name: str, img_dir: str) -> Optional[str]:
         if r.status_code == 200:
             import json
             data = r.json()
-            items = data.get("items", data.get("data", []))
+            items = data.get("items") or data.get("data") or []
             for item in items[:5]:
                 img_url = item.get("image_url", item.get("thumbnail", ""))
                 if img_url and _try_download(img_url, save_path):

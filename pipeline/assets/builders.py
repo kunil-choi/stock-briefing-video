@@ -735,6 +735,60 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
     return paths
 
 
+# ── 집계형 종목 섹션 (추가 관심 종목 / 오늘의 픽 / 증권사 리포트) ────────────
+# summary+chart+mention 개별 카드가 아니라 단일 나레이션 슬라이드 한 장으로 구성.
+
+def _build_aggregate_stock_slide(sec, out_dir, filename, title, theme="default", bar_color=None):
+    img  = new_frame(theme=theme)
+    draw = ImageDraw.Draw(img)
+    draw_topbar(draw, title, color=bar_color)
+
+    corner_summary = sec.get("corner_summary", "")
+    body_text = sec.get("subtitle", sec.get("narration", ""))
+
+    cy = 96
+    if corner_summary:
+        draw.rounded_rectangle([MARGIN_X, cy, W - MARGIN_X, cy + 52],
+                                radius=10, fill=(14, 22, 60))
+        draw.rounded_rectangle([MARGIN_X, cy, MARGIN_X + 5, cy + 52],
+                                radius=0, fill=C["gold"])
+        draw.text((MARGIN_X + 22, cy + 14), corner_summary,
+                  font=fnt(28, bold=False), fill=C["gold"])
+        cy += 68
+
+    if body_text:
+        draw_wrapped_text(draw, body_text,
+                          MARGIN_X, cy, W - MARGIN_X * 2,
+                          size=30, bold=False, color=C["white"], line_gap=14)
+
+    draw_bottombar(draw)
+    return _save(img, os.path.join(out_dir, filename))
+
+
+def build_extra_watchlist(data, out_dir):
+    sec = _find_section(data.get("sections", []), "stock_추가관심종목")
+    if not sec:
+        return None
+    return _build_aggregate_stock_slide(sec, out_dir, "90_extra_watchlist.png",
+                                        "추가 관심 종목", theme="blue")
+
+
+def build_today_pick(data, out_dir):
+    sec = _find_section(data.get("sections", []), "stock_오늘의픽")
+    if not sec:
+        return None
+    return _build_aggregate_stock_slide(sec, out_dir, "91_today_pick.png",
+                                        "오늘의 픽", theme="purple", bar_color=(35, 12, 65))
+
+
+def build_brokerage_report(data, out_dir):
+    sec = _find_section(data.get("sections", []), "stock_증권사리포트")
+    if not sec:
+        return None
+    return _build_aggregate_stock_slide(sec, out_dir, "92_brokerage_report.png",
+                                        "증권사 리포트", theme="green", bar_color=(8, 30, 18))
+
+
 # ── AI 투자 전략 ────────────────────────────────────────────────────────────
 
 def build_ai_strategy(data, out_dir):

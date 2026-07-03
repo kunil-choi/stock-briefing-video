@@ -39,6 +39,12 @@ def main(lang: str = "KO"):
             audio_id = "market_summary"
         elif stem.startswith("02_sector"):
             audio_id = "sectors"
+        elif stem == "90_extra_watchlist":
+            audio_id = "stock_추가관심종목"
+        elif stem == "91_today_pick":
+            audio_id = "stock_오늘의픽"
+        elif stem == "92_brokerage_report":
+            audio_id = "stock_증권사리포트"
         elif stem == "98_ai_strategy":
             audio_id = "ai_strategy"
         elif stem == "99_closing":

@@ -16,6 +16,9 @@ ASS(Advanced SubStation Alpha) 자막 파일 생성 모듈
   10_삼성전자_2_chart.png    → stock_삼성전자_chart.mp3
   10_삼성전자_3_mention.png  → stock_삼성전자_mention.mp3
   10_삼성전자_3_mention_00.png → stock_삼성전자_mention_00.mp3
+  90_extra_watchlist.png     → stock_추가관심종목.mp3
+  91_today_pick.png          → stock_오늘의픽.mp3
+  92_brokerage_report.png    → stock_증권사리포트.mp3
   98_ai_strategy.png         → ai_strategy.mp3
   99_closing.png             → closing.mp3
 """
@@ -54,6 +57,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 CHARS_PER_LINE = 45   # 자막 한 줄 최대 글자 수
 MAX_LINES      = 2    # 자막 최대 줄 수
 SILENT_DURATION = 3.0 # 오디오 없을 때 기본 슬라이드 길이
+
+# summary+chart+mention 개별 카드가 아니라 단일 슬라이드로 렌더링되는 집계형 종목 섹션
+AGGREGATE_STOCK_SECTION_IDS = {"stock_추가관심종목", "stock_오늘의픽", "stock_증권사리포트"}
 
 
 def _ts(seconds: float) -> str:
@@ -101,11 +107,14 @@ def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
     """
     # 고정 패턴 (정확한 매핑)
     fixed_patterns = [
-        (r'^00_opening$',      'opening'),
-        (r'^01_market',        'market_summary'),
-        (r'^02_sector',        'sectors'),
-        (r'^98_ai_strategy',   'ai_strategy'),
-        (r'^99_closing',       'closing'),
+        (r'^00_opening$',           'opening'),
+        (r'^01_market',             'market_summary'),
+        (r'^02_sector',             'sectors'),
+        (r'^90_extra_watchlist$',   'stock_추가관심종목'),
+        (r'^91_today_pick$',        'stock_오늘의픽'),
+        (r'^92_brokerage_report$',  'stock_증권사리포트'),
+        (r'^98_ai_strategy',        'ai_strategy'),
+        (r'^99_closing',            'closing'),
     ]
     for pattern, audio_id in fixed_patterns:
         if re.match(pattern, stem):
@@ -197,7 +206,10 @@ def _build_subtitle_map(sections: list, lang: str) -> dict:
         if not sid:
             continue
 
-        is_stock = sid.startswith("stock_") or sid.startswith("hidden_")
+        is_stock = (
+            (sid.startswith("stock_") or sid.startswith("hidden_"))
+            and sid not in AGGREGATE_STOCK_SECTION_IDS
+        )
 
         if is_stock:
             # summary
