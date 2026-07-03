@@ -3,6 +3,9 @@ import os
 
 W, H = 1920, 1080
 
+SUBTITLE_ZONE_TOP = 900    # 자막 전용 영역 시작 Y좌표 (하단 180px)
+CONTENT_ZONE_BOTTOM = 900  # 콘텐츠가 침범하면 안 되는 Y좌표
+
 C = {
     "bg":             (10,  12,  35),
     "gold":           (255, 195,  0),

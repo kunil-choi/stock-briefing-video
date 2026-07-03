@@ -39,6 +39,7 @@ def text_to_speech(text: str, output_path: str) -> bool:
             voice=OPENAI_VOICE,
             input=processed_text,
             response_format="mp3",
+            speed=1.3,
         )
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "wb") as f:
