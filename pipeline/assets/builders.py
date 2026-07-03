@@ -585,7 +585,7 @@ def _build_stock_chart(sec, out_path, img_dir):
         draw.rounded_rectangle([MARGIN_X, H // 2 - 60, W - MARGIN_X, H // 2 + 60],
                                 radius=16, fill=(18, 30, 22))
         draw.text((CX, H // 2), f"{stock_name} 차트 데이터 준비 중",
-                  font=fnt(36), fill=(120, 160, 140), anchor="mm")
+                  font=fnt(36), fill=(200, 200, 220), anchor="mm")
 
     draw_bottombar(draw, stock_name)
     return _save(img, out_path)
@@ -680,9 +680,9 @@ def _build_mention_page(sec, out_path, page_idx):
                 hw = min(len(header) * 14 + 32, 600)
             draw.rounded_rectangle([MARGIN_X + 18, cy + 12,
                                      MARGIN_X + 18 + hw, cy + 48],
-                                    radius=18, fill=(*accent_col, 38))
+                                    radius=18, fill=(30, 30, 60))
             draw.text((MARGIN_X + 34, cy + 30), header,
-                      font=fnt(26, bold=True), fill=accent_col, anchor="lm")
+                      font=fnt(26, bold=True), fill=(240, 240, 250), anchor="lm")
 
         # 인용부호 장식 (우측)
         draw.text((W - MARGIN_X - 56, cy + 10), "\u275d",
