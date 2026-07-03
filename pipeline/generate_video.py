@@ -371,10 +371,9 @@ def run(lang: str = "KO"):
             section_videos.append(out_video)
 
     if missing_audio:
-        print("\n❌ 누락된 오디오가 있어 영상을 생성하지 않습니다.")
+        print("\n⚠️  누락된 오디오가 있어 해당 섹션을 건너뜁니다.")
         for audio_id in missing_audio:
             print(f"   - {audio_id}.mp3")
-        sys.exit(1)
 
     if not section_videos:
         print("❌ 생성된 섹션 영상 없음"); sys.exit(1)
