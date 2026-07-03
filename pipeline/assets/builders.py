@@ -649,8 +649,8 @@ def _build_mention_page(sec, out_path, page_idx):
         if isinstance(m, str):
             m = {"speaker": "", "channel": "", "quote_subtitle": m}
 
-        speaker  = m.get("speaker", "").strip()
-        channel  = m.get("channel", m.get("source", "")).strip()
+        speaker  = (m.get("speaker") or "").strip()
+        channel  = (m.get("channel") or m.get("source") or "").strip()
         content  = m.get("quote_subtitle", m.get("quote", m.get("content", "")))
         accent_col = mention_colors[mi % len(mention_colors)]
         actual_h   = min(card_h, Y_MAX - cy)
