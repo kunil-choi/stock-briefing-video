@@ -183,21 +183,23 @@ def _find_stock_section_id(stock_name: str, sections: list) -> str:
     return f"stock_{stock_name}"
 
 
-def _build_subtitle_map(sections: list, lang: str) -> dict:
+def _build_subtitle_map(sections: list, lang: str):
     """
-    섹션 ID → 자막 텍스트 매핑 딕셔너리를 생성합니다.
+    섹션 ID → (narration_text, subtitle_text) 매핑 딕셔너리를 생성합니다.
     오디오 ID와 동일한 키를 사용합니다.
 
+    narration_text를 함께 반환하는 이유: 자막 표출 시간은 실제로 낭독되는
+    narration의 길이에 비례해야 정확한데, 화면에는 표기가 다른 subtitle
+    텍스트를 보여줘야 하기 때문입니다 (숫자/영문 표기 차이). 두 텍스트를
+    같은 키로 짝지어 반환해 _make_dialogue_events()가 문장 단위로 정렬할
+    수 있게 합니다.
+
     반환: {
-        'opening': '자막텍스트',
-        'market_summary': '자막텍스트',
-        'sectors': '자막텍스트',
-        'stock_삼성전자_summary': '자막텍스트',
-        'stock_삼성전자_chart': '자막텍스트',
-        'stock_삼성전자_mention_00': '자막텍스트',   # 항상 숫자 포함 (builders와 통일)
-        'stock_삼성전자_mention_01': '자막텍스트',
-        'ai_strategy': '자막텍스트',
-        'closing': '자막텍스트',
+        'opening': (narration, subtitle),
+        'market_summary': (narration, subtitle),
+        ...
+        'stock_삼성전자_mention_00': (narration, subtitle),
+        ...
     }
     """
     subtitle_map = {}
@@ -215,14 +217,16 @@ def _build_subtitle_map(sections: list, lang: str) -> dict:
 
         if is_stock:
             # summary
-            sub = section.get("subtitle_summary", section.get("subtitle", ""))
+            narr = section.get("narration_summary", section.get("narration", ""))
+            sub  = section.get("subtitle_summary", section.get("subtitle", ""))
             if sub:
-                subtitle_map[f"{sid}_summary"] = sub
+                subtitle_map[f"{sid}_summary"] = (narr, sub)
 
             # chart
-            sub = section.get("subtitle_chart", section.get("subtitle", ""))
+            narr = section.get("narration_chart", section.get("narration", ""))
+            sub  = section.get("subtitle_chart", section.get("subtitle", ""))
             if sub:
-                subtitle_map[f"{sid}_chart"] = sub
+                subtitle_map[f"{sid}_chart"] = (narr, sub)
 
             # mention
             mentions   = section.get("mentions", [])
@@ -235,25 +239,39 @@ def _build_subtitle_map(sections: list, lang: str) -> dict:
                 pages = max(1, (n_mentions + 2) // 3)
                 for p in range(pages):
                     sub = section.get(f"subtitle_mention_{p}", "")
+                    narr = section.get(f"narration_mention_{p}", "")
                     if not sub and pages == 1:
-                        # 단일 페이지: subtitle_mention 필드도 허용
+                        # 단일 페이지: subtitle_mention/narration_mention 필드도 허용
                         sub = section.get("subtitle_mention", "")
+                        narr = narr or section.get("narration_mention", "")
+                    page_items = mentions[p * 3: p * 3 + 3]
                     if not sub:
-                        page_items = mentions[p * 3: p * 3 + 3]
                         sub = " | ".join(
                             m.get("quote_subtitle", "") for m in page_items
                             if m.get("quote_subtitle", "")
                         )
+                    if not narr:
+                        narr = " ".join(
+                            m.get("quote_narration", "") for m in page_items
+                            if m.get("quote_narration", "")
+                        )
                     if sub:
-                        subtitle_map[f"{sid}_mention_{p:02d}"] = sub
+                        subtitle_map[f"{sid}_mention_{p:02d}"] = (narr, sub)
             else:
-                # mentions 배열 없는 경우: subtitle_mention_N 직접 필드
-                text_0 = section.get("subtitle_mention_0", section.get("subtitle_mention", ""))
-                text_1 = section.get("subtitle_mention_1", "")
-                text_2 = section.get("subtitle_mention_2", "")
-                for p, sub in enumerate([text_0, text_1, text_2]):
+                # mentions 배열 없는 경우: subtitle_mention_N/narration_mention_N 직접 필드
+                sub_texts  = [
+                    section.get("subtitle_mention_0", section.get("subtitle_mention", "")),
+                    section.get("subtitle_mention_1", ""),
+                    section.get("subtitle_mention_2", ""),
+                ]
+                narr_texts = [
+                    section.get("narration_mention_0", section.get("narration_mention", "")),
+                    section.get("narration_mention_1", ""),
+                    section.get("narration_mention_2", ""),
+                ]
+                for p, (narr, sub) in enumerate(zip(narr_texts, sub_texts)):
                     if sub:
-                        subtitle_map[f"{sid}_mention_{p:02d}"] = sub
+                        subtitle_map[f"{sid}_mention_{p:02d}"] = (narr, sub)
 
         elif sid == "closing":
             # 클로징 슬라이드는 투자 유의사항 전문을 화면에 이미 글자로 표시하므로
@@ -262,11 +280,20 @@ def _build_subtitle_map(sections: list, lang: str) -> dict:
 
         else:
             # 일반 섹션
-            sub = section.get("subtitle", "")
+            narr = section.get("narration", "")
+            sub  = section.get("subtitle", "")
             if sub:
-                subtitle_map[sid] = sub
+                subtitle_map[sid] = (narr, sub)
 
     return subtitle_map
+
+
+def _split_sentences(text: str) -> list:
+    """문장 단위로만 분할합니다 (화면 표출용 줄바꿈/청크 병합 없이 순수 분리)."""
+    if not text:
+        return []
+    sentences = re.split(r'(?<=[.。!?])\s*', text.strip())
+    return [s.strip() for s in sentences if s.strip()]
 
 
 def _split_subtitle_text(text: str) -> list:
@@ -324,38 +351,51 @@ def _format_ass_text(text: str) -> str:
     return r"\N".join(lines[:MAX_LINES])
 
 
-def _make_dialogue_events(subtitle_text: str,
+def _make_dialogue_events(narration_text: str, subtitle_text: str,
                            start_time: float,
                            duration: float,
                            style: str = "Default") -> list:
     """
     자막 텍스트를 duration에 맞게 분할하여 ASS Dialogue 이벤트 리스트를 반환합니다.
 
-    각 청크의 표출 시간은 균등 분할이 아니라 글자 수에 비례해 배분합니다.
-    나레이션은 실제로 각 문장 길이에 비례한 시간이 걸리므로, 균등 분할 시
-    짧은 문장은 자막이 필요 이상으로 오래 남고 긴 문장은 나레이션이 끝나기
-    전에 자막이 먼저 사라지는 동기화 오차가 발생합니다.
+    자막 표출 시간은 subtitle 문장 길이가 아니라 실제로 낭독되는 narration 문장의
+    길이에 비례해 배분합니다. narration/subtitle은 표기만 다를 뿐(숫자·영문 표기 차이)
+    같은 내용을 담고 있어야 하므로, 문장 수가 일치하면 문장 단위로 1:1 짝지어 각
+    narration 문장 길이만큼 시간을 배분하고 그 구간에 대응하는 subtitle 문장을 표시합니다.
+    문장 수가 다르면(LLM이 형식을 못 지킨 경우) subtitle 자체 길이 비례로 대체합니다.
     """
     if not subtitle_text or duration <= 0:
         return []
 
-    chunks = _split_subtitle_text(subtitle_text)
-    if not chunks:
-        return []
+    narr_sentences = _split_sentences(narration_text)
+    sub_sentences  = _split_sentences(subtitle_text)
 
-    total_len = sum(len(c) for c in chunks) or 1
+    if narr_sentences and sub_sentences and len(narr_sentences) == len(sub_sentences):
+        pairs = list(zip((len(s) for s in narr_sentences), sub_sentences))
+    else:
+        # narration과 subtitle 문장 수가 다르면 subtitle 자체 길이 비례로 대체
+        pairs = [(len(s), s) for s in (sub_sentences or [subtitle_text])]
+
+    total_weight = sum(w for w, _ in pairs) or 1
     events = []
     t_cursor = start_time
 
-    for i, chunk in enumerate(chunks):
-        chunk_duration = duration * (len(chunk) / total_len)
-        t_start  = t_cursor
-        t_end    = t_start + chunk_duration - 0.08
-        ass_text = _format_ass_text(chunk)
-        events.append(
-            f"Dialogue: 0,{_ts(t_start)},{_ts(t_end)},{style},,0,0,0,,{ass_text}"
-        )
-        t_cursor += chunk_duration
+    for weight, sub_sentence in pairs:
+        seg_duration = duration * (weight / total_weight)
+        chunks = _split_subtitle_text(sub_sentence)
+        if not chunks:
+            t_cursor += seg_duration
+            continue
+        chunk_total_len = sum(len(c) for c in chunks) or 1
+        for chunk in chunks:
+            chunk_duration = seg_duration * (len(chunk) / chunk_total_len)
+            t_start  = t_cursor
+            t_end    = t_start + chunk_duration - 0.08
+            ass_text = _format_ass_text(chunk)
+            events.append(
+                f"Dialogue: 0,{_ts(t_start)},{_ts(t_end)},{style},,0,0,0,,{ass_text}"
+            )
+            t_cursor += chunk_duration
 
     return events
 
@@ -379,7 +419,7 @@ def generate_ass(sections: list, lang: str, out_path: str,
 
     print(f"\n  [subtitle] 자막 맵 키 수: {len(subtitle_map)}")
     for k in list(subtitle_map.keys())[:5]:
-        print(f"    · {k}: {subtitle_map[k][:30]}...")
+        print(f"    · {k}: {subtitle_map[k][1][:30]}...")
     if time_scale != 1.0:
         print(f"  [subtitle] 배속 보정 적용: time_scale={time_scale:.4f}")
 
@@ -389,11 +429,11 @@ def generate_ass(sections: list, lang: str, out_path: str,
     if not frame_order:
         # frame_order 없으면 subtitle_map 순서대로 처리
         print("  [subtitle] ⚠️ frame_order 없음 — subtitle_map 순서로 처리")
-        for audio_id, subtitle_text in subtitle_map.items():
+        for audio_id, (narration_text, subtitle_text) in subtitle_map.items():
             mp3_path = os.path.join(audio_base, f"{audio_id}.mp3")
             duration = _get_audio_duration(mp3_path) * time_scale
             style    = "Warning" if "closing" in audio_id else "Default"
-            slide_events = _make_dialogue_events(subtitle_text, current_time, duration, style)
+            slide_events = _make_dialogue_events(narration_text, subtitle_text, current_time, duration, style)
             events.extend(slide_events)
             print(f"    {audio_id}: {duration:.1f}s, {len(slide_events)}개 이벤트")
             current_time += duration
@@ -404,12 +444,12 @@ def generate_ass(sections: list, lang: str, out_path: str,
             mp3_path = os.path.join(audio_base, f"{audio_id}.mp3")
             duration = _get_audio_duration(mp3_path) * time_scale
 
-            subtitle_text = subtitle_map.get(audio_id, "")
+            narration_text, subtitle_text = subtitle_map.get(audio_id, ("", ""))
 
             style = "Warning" if "closing" in audio_id else "Default"
 
             if subtitle_text:
-                slide_events = _make_dialogue_events(subtitle_text, current_time, duration, style)
+                slide_events = _make_dialogue_events(narration_text, subtitle_text, current_time, duration, style)
                 events.extend(slide_events)
                 print(f"  [subtitle] {stem} → {audio_id}: {duration:.1f}s, {len(slide_events)}개 이벤트")
             else:
