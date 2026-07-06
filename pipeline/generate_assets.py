@@ -20,6 +20,7 @@ from assets.builders import (
     build_ai_strategy,
     build_closing,
 )
+from assets.render import close_renderer
 
 # summary+chart+mention 개별 카드가 아니라 단일 슬라이드로 렌더링되는 집계형 종목 섹션
 AGGREGATE_STOCK_SECTION_IDS = {"stock_추가관심종목", "stock_오늘의픽", "stock_증권사리포트"}
@@ -48,30 +49,33 @@ def run(lang: str = "KO"):
 
     asset_map = {"frames": [], "lang": lang}
 
-    asset_map["frames"].append(build_opening(data, out_dir))
-    asset_map["frames"].extend(build_market_summary(data, out_dir))
-    asset_map["frames"].append(build_sector(data, out_dir))
+    try:
+        asset_map["frames"].append(build_opening(data, out_dir))
+        asset_map["frames"].extend(build_market_summary(data, out_dir))
+        asset_map["frames"].append(build_sector(data, out_dir))
 
-    stock_secs = [
-        s for s in sections
-        if (s.get("id", "").startswith("stock_") or s.get("id", "").startswith("hidden_"))
-        and s.get("id", "") not in AGGREGATE_STOCK_SECTION_IDS
-    ]
-    for i, sec in enumerate(stock_secs):
-        sec_id = sec.get("id", f"stock_{i}")
-        # ── 수정: data 서브키 없음, id에서 직접 종목명 추출 ──────────────
-        name = sec_id.replace("stock_", "").replace("hidden_", "")
-        prefix = f"{10 + i:02d}_{name}"
-        frames = build_stock_cards(sec, out_dir, img_dir, prefix)
-        asset_map["frames"].extend(frames)
+        stock_secs = [
+            s for s in sections
+            if (s.get("id", "").startswith("stock_") or s.get("id", "").startswith("hidden_"))
+            and s.get("id", "") not in AGGREGATE_STOCK_SECTION_IDS
+        ]
+        for i, sec in enumerate(stock_secs):
+            sec_id = sec.get("id", f"stock_{i}")
+            # ── 수정: data 서브키 없음, id에서 직접 종목명 추출 ──────────────
+            name = sec_id.replace("stock_", "").replace("hidden_", "")
+            prefix = f"{10 + i:02d}_{name}"
+            frames = build_stock_cards(sec, out_dir, img_dir, prefix)
+            asset_map["frames"].extend(frames)
 
-    for builder in (build_extra_watchlist, build_today_pick, build_brokerage_report):
-        frame = builder(data, out_dir)
-        if frame:
-            asset_map["frames"].append(frame)
+        for builder in (build_extra_watchlist, build_today_pick, build_brokerage_report):
+            frame = builder(data, out_dir)
+            if frame:
+                asset_map["frames"].append(frame)
 
-    asset_map["frames"].append(build_ai_strategy(data, out_dir))
-    asset_map["frames"].append(build_closing(data, out_dir))
+        asset_map["frames"].append(build_ai_strategy(data, out_dir))
+        asset_map["frames"].append(build_closing(data, out_dir))
+    finally:
+        close_renderer()
 
     map_path = os.path.join(root, "output", lang, "asset_map.json")
     with open(map_path, "w", encoding="utf-8") as f:

@@ -9,6 +9,7 @@ AI 주식 브리핑 — 스크립트 생성 모듈 (v3)
 """
 
 import os
+import re
 import sys
 import json
 from datetime import datetime
@@ -132,11 +133,61 @@ def fetch_briefing():
         return ""
 
 
+def _kdate_to_iso(date_str: str) -> str:
+    """'2026년 07월 06일' → '2026-07-06'. 매칭 실패 시 빈 문자열."""
+    m = re.match(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", date_str or "")
+    if not m:
+        return ""
+    y, mo, d = m.groups()
+    return f"{y}-{int(mo):02d}-{int(d):02d}"
+
+
+def fetch_youtube_mentions() -> list:
+    """data/youtube_mentions.json — 종목별 실제 발언(화자/채널/원문 인용) 원본 데이터."""
+    try:
+        import urllib.request
+        url = "https://kunil-choi.github.io/stock-briefing-v3/data/youtube_mentions.json"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"⚠️ youtube_mentions.json 로드 실패: {e}")
+        return []
+
+
+def build_stock_quotes(mentions: list, briefing_date_iso: str) -> dict:
+    """
+    종목명을 정규화해 stock_name → [{speaker, channel, quote, timestamp_url, sentiment}] 로 그룹핑.
+    briefing_date_iso가 있으면 같은 날짜의 발언만 사용 (V3 브리핑과 날짜 어긋남 방지).
+    종목당 최대 3개 발언만 유지해 narration 분량을 통제한다.
+    """
+    grouped: dict = {}
+    for m in mentions:
+        if briefing_date_iso and m.get("date") and m.get("date") != briefing_date_iso:
+            continue
+        raw_name = (m.get("stock_name") or "").strip()
+        if not raw_name:
+            continue
+        name = normalize_stock_name(raw_name)
+        grouped.setdefault(name, []).append({
+            "speaker":       m.get("speaker") or m.get("main_speaker", ""),
+            "channel":       m.get("channel", ""),
+            "quote":         m.get("quote", ""),
+            "timestamp_url": m.get("timestamp_url") or m.get("video_url", ""),
+            "sentiment":     m.get("sentiment", ""),
+        })
+    return {name: items[:3] for name, items in grouped.items()}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 스크립트 생성
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_script(briefing_text: str, market_data: dict = None) -> dict:
+def generate_script(
+    briefing_text: str,
+    market_data: dict = None,
+    brokerage_reports: dict = None,
+    stock_quotes: dict = None,
+) -> dict:
     system_prompt = f"""
 너는 KBS 머니올라 주식 방송 스크립트 작성 전문가입니다.
 증권 브리핑 데이터를 바탕으로 **15분짜리** 방송 스크립트를 JSON 형식으로 작성하세요.
@@ -187,9 +238,13 @@ def generate_script(briefing_text: str, market_data: dict = None) -> dict:
   하나 만들어 종목당 2~3문장으로 소개. 생략하지 말 것.
 - hidden_picks: 데이터가 있으면 반드시 포함. "오늘의 픽" 섹션(id: stock_오늘의픽)으로 구성.
   데이터가 비어 있으면 해당 섹션 자체를 생략.
-- brokerage_reports 필드가 있으면, 그 안의 모든 항목을 "증권사 리포트" 섹션
-  (id: stock_증권사리포트)으로 구성. 동시언급 종목과 커버리지 개시 종목을 각각
-  종목당 1~2문장으로 소개. brokerage_reports 필드가 없거나 비어 있으면 이 섹션 생략.
+- brokerage_reports(JSON, 아래 별도 제공)가 있으면 세 카테고리를 모두 빠짐없이 반영해
+  "증권사 리포트" 섹션(id: stock_증권사리포트)을 구성하세요.
+  · simultaneous(동시언급): "여러 증권사에서 동시에 주목한 [종목명]입니다."로 소개
+  · new_coverage(신규 커버리지 개시): "[증권사]가 [종목명]에 대한 커버리지를 새로 시작했습니다."로 소개
+  · single_significant(유의미한 단독 언급): "[증권사]는 [종목명]에 대해 [의견/목표주가 요지]를 제시했습니다."로 소개
+  각 항목은 ai_summary 필드가 있으면 그 내용을 근거로 종목당 1~2문장으로 간결히 소개하고,
+  세 카테고리 배열이 모두 비어 있으면 이 섹션 자체를 생략하세요.
 
 ## ★ 종목 목록 매핑
 {STOCK_NAME_LIST}
@@ -223,6 +278,13 @@ def generate_script(briefing_text: str, market_data: dict = None) -> dict:
   · MOU(업무협약) | ADR(미국주식예탁증서) | PCE(개인소비지출) | ESS(에너지저장장치)
 
 ## ★ mention 항목 규칙
+
+### 실제 발언 근거 (반드시 준수 — 지어내기 금지)
+- 아래 별도 제공되는 stock_quotes(JSON)에 해당 종목명이 있으면, 그 안의 speaker/channel/quote를
+  그대로 근거로 사용해 quote_narration/quote_subtitle을 작성하세요. 숫자·발음 교정과 어미 다양화만
+  적용하고, 발언의 내용·수치·논조는 절대 새로 창작하거나 다른 뜻으로 바꾸지 마세요.
+- 해당 종목이 stock_quotes에 없으면 mentions 배열은 비워두거나 필드 자체를 생략하세요.
+  없는 발언을 지어내는 것보다 mentions를 생략하는 것이 낫습니다.
 
 ### quote_narration (TTS 낭독용 — 구어체)
 - 채널명을 먼저 호명: "발화자가 있으면 [채널]의 [발화자]는," / 없으면 "[채널]에서는,"
@@ -347,10 +409,17 @@ def generate_script(briefing_text: str, market_data: dict = None) -> dict:
             {"role": "user",   "content": (
                 "15분 분량의 KBS 머니올라 방송 스크립트를 작성해주세요. 각 섹션은 최소 목표 글자 수를 반드시 초과해야 하며, "
                 "분량이 부족하면 관련 배경 설명과 시장 맥락을 추가로 서술하세요.\n"
-                "유튜브 출연진 멘트를 반드시 포함시켜 주세요.\n\n"
+                "유튜브 출연진 멘트를 반드시 포함시켜 주세요. mentions는 아래 stock_quotes JSON에 있는 "
+                "실제 발언만 사용하고, 없는 종목은 mentions를 생략하세요.\n\n"
                 + (f"## 실시간 시장 지표 (market_summary JSON 필드에 그대로 사용하세요)\n"
                    f"{json.dumps(market_data, ensure_ascii=False, indent=2)}\n\n"
                    if market_data else "")
+                + (f"## 증권사 리포트 데이터 (JSON, stock_증권사리포트 섹션에 반드시 반영)\n"
+                   f"{json.dumps(brokerage_reports, ensure_ascii=False, indent=2)}\n\n"
+                   if brokerage_reports else "")
+                + (f"## 종목별 실제 발언 인용 (JSON, mentions 필드는 이 데이터만 근거로 작성)\n"
+                   f"{json.dumps(stock_quotes, ensure_ascii=False, indent=2)}\n\n"
+                   if stock_quotes else "")
                 + briefing_text
             )}
         ],
@@ -412,14 +481,21 @@ def run(lang: str = "KO"):
 
     print(f"✅ 브리핑 텍스트 수신 완료 ({len(briefing_text):,}자)")
 
-    # briefing_data.json에서 market_data 직접 로드 (해외 지수/환율 포함)
+    # briefing_data.json에서 market_data + brokerage_reports 직접 로드 (해외 지수/환율 포함)
     market_data = None
+    brokerage_reports = None
+    briefing_date_iso = ""
     try:
         import urllib.request
         url = "https://kunil-choi.github.io/stock-briefing-v3/data/briefing_data.json"
         with urllib.request.urlopen(url, timeout=10) as resp:
             raw_json = json.loads(resp.read().decode("utf-8"))
         md = raw_json.get("market_data", {})
+        briefing_date_iso = _kdate_to_iso(raw_json.get("briefing_date", ""))
+
+        _br = raw_json.get("brokerage_reports") or {}
+        if any(_br.get(k) for k in ("simultaneous", "new_coverage", "single_significant")):
+            brokerage_reports = _br
 
         def _fmt_value(v):
             if v is None: return ""
@@ -451,7 +527,19 @@ def run(lang: str = "KO"):
     except Exception as e:
         print(f"⚠️ market_data 로드 실패 (briefing_data.json): {e} → 수치 없이 진행")
 
-    script = generate_script(briefing_text, market_data)
+    # 종목별 실제 발언 인용 로드 (youtube_mentions.json)
+    stock_quotes = None
+    yt_mentions = fetch_youtube_mentions()
+    if yt_mentions:
+        grouped = build_stock_quotes(yt_mentions, briefing_date_iso)
+        if grouped:
+            stock_quotes = grouped
+            total_quotes = sum(len(v) for v in grouped.values())
+            print(f"✅ 종목별 실제 발언 로드 완료: {len(grouped)}개 종목 / {total_quotes}건")
+    if not stock_quotes:
+        print("⚠️ youtube_mentions.json 매칭 실패 또는 비어있음 → mentions는 생략될 수 있음")
+
+    script = generate_script(briefing_text, market_data, brokerage_reports, stock_quotes)
 
     root     = os.path.join(_HERE, "..")
     out_dir  = os.path.join(root, "output", lang, "scripts")
