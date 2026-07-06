@@ -6,6 +6,8 @@ NotebookLM 스타일 참고: 밝은 배경 + 점그리드, 민트/틸 액센트 
 """
 import os
 import re
+import base64
+import mimetypes
 import html as _he
 from datetime import date
 from .config import SUBTITLE_ZONE_TOP
@@ -43,7 +45,23 @@ def strip_emoji(s: str) -> str:
 
 
 def file_uri(path: str) -> str:
-    return "file://" + os.path.abspath(path)
+    """로컬 이미지를 base64 data URI로 인라인합니다.
+
+    render_html_to_png()는 page.set_content()로 HTML을 로드하는데, 이 경우 문서
+    오리진이 about:blank가 되어 <img src="file://...">가 Chromium 보안 정책에 의해
+    조용히 차단됩니다(에러 없이 그냥 표시만 안 됨). 이 때문에 차트/로고 이미지가
+    데이터는 정상 생성되고도 화면에는 전혀 보이지 않는 문제가 있었습니다.
+    data: URI는 문서 오리진과 무관하게 항상 로드되므로 이 방식을 사용합니다.
+    """
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        mime, _ = mimetypes.guess_type(path)
+        mime = mime or "image/png"
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return "file://" + os.path.abspath(path)
 
 
 BASE_CSS = f"""

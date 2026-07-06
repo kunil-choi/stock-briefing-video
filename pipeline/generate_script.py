@@ -20,7 +20,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from assets.config import STOCK_CODES, normalize_stock_name, classify_channel_type
+from assets.config import (
+    STOCK_CODES, normalize_stock_name, classify_channel_type, resolve_channel_identity,
+)
 
 _api_key = os.environ.get("OPENAI_API_KEY")
 if not _api_key:
@@ -197,16 +199,30 @@ _PLAIN_NUMBER_RE = re.compile(
 )
 
 
+# 숫자처럼 보이지만 실제로는 일반 어휘인 경우 (오탐 확인된 단어만 등록).
+# 예: "구조"(9+조) → 구조적/구조원 등 실제 단어와 충돌하므로 절대 숫자로 변환하지 않음.
+_NUMBER_RUN_DENYLIST = {"구조"}
+
+
 def _fix_plain_numbers(text: str) -> str:
-    """'삼천오백원' → '3500원' 처럼 뒤에 단위가 붙거나 조/억/만으로 끝나
-    명백히 숫자로 판단되는 경우만 변환합니다 (오탐 방지를 위해 최소 2글자 +
-    십/백/천/만/억/조 중 하나를 포함하고, 단위 앵커가 있어야만 변환)."""
+    """'삼천오백원' → '3500원' 처럼 뒤에 원/퍼센트/포인트/배 단위가 붙는 경우,
+    또는 '십이조이천사백억'처럼 조/억/만 단위가 두 번 이상 나와 명백히 복합
+    숫자 표기로 판단되는 경우만 변환합니다.
+
+    한글에는 숫자 음절(일이삼사...구/십백천만억조)이 우연히 들어간 일반 단어가
+    매우 많습니다 (구조, 오만, 천만에요, 구천 등). 그래서 "조/억/만으로 끝나기만
+    하면 숫자"로 간주하던 이전 방식은 "구조적" → "9조적" 같은 오탐을 냈습니다.
+    이제는 반드시 (1) 뒤에 명시적 단위 앵커가 붙거나 (2) 조/억/만이 한 런에서
+    2회 이상 나타나 복합 숫자임이 명백한 경우에만 변환합니다.
+    """
     def repl(m):
         run, trailing = m.group(1), m.group(2) or ""
-        self_anchored = run[-1] in _KR_BIG_UNITS
         if len(run) < 2 or not any(c in "십백천만억조" for c in run):
             return m.group(0)
-        if not trailing and not self_anchored:
+        if run in _NUMBER_RUN_DENYLIST:
+            return m.group(0)
+        big_unit_count = sum(run.count(u) for u in _KR_BIG_UNITS)
+        if not trailing and big_unit_count < 2:
             return m.group(0)
         converted = _korean_number_run_to_digits(run)
         if converted is None:
@@ -332,9 +348,11 @@ def build_stock_quotes(mentions: list, briefing_date_iso: str) -> dict:
         if not raw_name:
             continue
         name = normalize_stock_name(raw_name)
-        channel = m.get("channel", "")
+        raw_channel = m.get("channel", "")
+        raw_speaker = m.get("speaker") or m.get("main_speaker", "")
+        channel, speaker = resolve_channel_identity(raw_channel, raw_speaker)
         grouped.setdefault(name, []).append({
-            "speaker":       m.get("speaker") or m.get("main_speaker", ""),
+            "speaker":       speaker,
             "channel":       channel,
             "channel_type":  classify_channel_type(channel),
             "quote":         m.get("quote", ""),
@@ -360,40 +378,42 @@ def generate_script(
 작성일: {TODAY}
 
 ## ★ 15분 영상 분량 설계 (반드시 준수)
-한국어 TTS 낭독 속도 기준: 1분 = 약 250자
-전체 목표: 오프닝+클로징 고정 텍스트 포함 총 3,230자 이상
+한국어 TTS 낭독 속도 기준(1.3배속 적용 시): 1분 = 약 310~320자
+전체 목표: 오프닝+클로징 고정 텍스트 포함 총 5,800자 이상 — 반드시 이 이상을 채워서
+실제 방송 분량이 15분에 최대한 가깝게 나오도록 하세요. 분량이 부족하면 영상 후반부가
+음악만 나오는 빈 시간으로 채워지므로, 목표치 미달은 반드시 피해야 합니다.
 
 ### 섹션별 narration 목표 글자 수 (공백 포함):
-- market_summary : 350~420자 (목표 1분 30초, 이 범위를 반드시 지킬 것 — 초과 금지)
-  → KOSPI·KOSDAQ·해외지수·환율 수치와 등락 방향, 가장 핵심적인 원인 1~2가지만 짚고 마무리.
-    개별 업종·종목 관련 상세 설명은 여기서 하지 말고 다음 코너(sectors, 종목 분석)로 넘길 것.
-    900자 이상으로 장황하게 서술했던 과거 방식은 금지 — 간결하게 핵심 수치와 흐름만 전달.
+- market_summary : 480~600자 (목표 1분 30초~2분, 이 범위 안에서는 자유롭게 서술)
+  → KOSPI·KOSDAQ·해외지수·환율 수치와 등락 방향, 핵심 원인과 배경을 구체적으로 설명.
+    600자를 크게 넘기지 않도록 하되, 이전처럼 900자 이상으로 장황해지는 것만 피하세요.
 
-- sectors : 800자 이상 (약 3분)
+- sectors : 900자 이상 (약 3분)
   → hot_sectors 각 섹터를 3~5문장으로 충분히 설명.
   → market_summary에서 이미 언급한 지수 수치·환율·전반적 시황 코멘트는 반복하지 말 것.
     업종별 개별 동인(수급, 실적, 정책, 해외 이슈 등)과 관련 종목·테마 흐름 등
     market_summary에서 다루지 않은 새로운 내용 위주로 서술.
 
-- 각 stock 섹션 narration : 600자 이상
-  → summary, catalyst, risk, mention 모두 포함. 종목별로 구체적 수치와 전망까지 서술.
+- 각 stock 섹션 narration : 900자 이상 (요구사항: 종목별 설명을 더 자세히)
+  → summary, catalyst, risk, mention 모두 포함. 종목별로 구체적 수치와 전망까지 충분히 서술.
   → narration_mention(전문가 발언 소개) 분량이 narration_summary보다 짧아지지 않도록 하세요.
     이 코너의 핵심은 "누가 무엇을 말했는지"이므로 mention 분량을 가장 충실하게 작성합니다.
+    발언 각각을 2~3문장으로 풀어 쓰고, 발언 원문의 뉘앙스와 근거·수치까지 살리세요.
 
-- stock_추가관심종목 : 종목 수에 비례 (종목당 최소 60자, 전체 200자 이상)
+- stock_추가관심종목 : 종목 수에 비례 (종목당 최소 100자, 전체 400자 이상)
   → "다음은 오늘의 추가 관심 종목입니다."로 시작.
     stocks 배열에서 개별 섹션으로 다루지 않은 나머지 종목을 전부 소개.
-    각 종목: 등락 방향 + 핵심 이유 1가지 + 전망 한 문장.
+    각 종목: 등락 방향 + 핵심 이유 + 전망까지 2문장 이상으로 서술 (한 문장으로 끝내지 말 것).
   → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고). 전체 시간이 부족하면 items 중 관심도가
     낮은 하위 종목들만 따로 "추가 관심 종목"으로 분리해 다뤄도 좋습니다.
 
-- stock_오늘의픽 : hidden_picks 데이터가 있을 때만 생성 (전체 200자 이상)
+- stock_오늘의픽 : hidden_picks 데이터가 있을 때만 생성 (전체 300자 이상)
   → "오늘의 숨은 픽을 소개합니다."로 시작.
     hidden_picks 종목 각각을 2~3문장으로 소개.
     hidden_picks가 비어 있으면 이 섹션 자체를 JSON에 포함하지 말 것.
   → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고).
 
-- stock_증권사리포트 : brokerage_reports 데이터가 있을 때만 생성 (전체 200자 이상)
+- stock_증권사리포트 : brokerage_reports 데이터가 있을 때만 생성 (전체 300자 이상)
   → "증권사 리포트에서 주목한 종목을 살펴보겠습니다."로 시작.
     동시언급 종목은 "여러 증권사에서 동시에 주목한 [종목명]입니다."로 소개.
     커버리지 개시 종목은 "[증권사]가 [종목명]에 대한 커버리지를 새로 시작했습니다."로 소개.
@@ -407,16 +427,17 @@ def generate_script(
 - items의 개수와 순서는 narration에서 종목을 언급한 개수·순서와 반드시 일치해야 합니다.
 - 문장마다 번호를 매기지 말고, 반드시 종목(items 원소)마다 번호가 매겨지도록 하세요.
 
-- ai_strategy : 600자 이상 (약 2분 20초)
+- ai_strategy : 700자 이상 (약 2분 20초)
   → 오늘 시장 흐름을 종합한 투자 전략을 구체적으로 서술.
 
 ### 분량 검증 규칙:
 - 각 섹션 narration을 작성한 뒤 글자 수를 스스로 확인하세요.
-- market_summary를 제외한 섹션은 목표치에 미달하면 반드시 추가 설명을 붙여 목표치를 채우세요.
-- market_summary는 350~420자 범위를 반드시 지키세요. 420자를 넘기면 문장을 줄여서 범위 안으로
-  맞추고, 부족한 배경 설명은 sectors나 종목 분석 섹션으로 옮기세요.
-- "간략히", "짧게", "요약하면" 같은 표현으로 내용을 줄이지 마세요 (단, market_summary의 420자
-  상한 준수를 위한 문장 압축은 예외).
+- 모든 섹션이 목표치에 미달하면 반드시 추가 설명(배경·수치·전망·발언 인용 확장)을 붙여
+  목표치를 채우세요. 목표 미달은 영상 후반부가 무음/음악만 나오는 결과로 이어지므로
+  절대 피해야 합니다.
+- market_summary만 600자를 넘기지 않도록 관리하고, 나머지 섹션은 목표치 이상으로
+  풍부하게 작성하는 것을 권장합니다.
+- "간략히", "짧게", "요약하면" 같은 표현으로 내용을 줄이지 마세요.
 
 ## ★ 종목 선별 기준
 - market_leaders (2개): 반드시 모두 포함, summary+chart+mention 슬라이드 구성
@@ -483,20 +504,27 @@ def generate_script(
 - stock_quotes에 여러 발언이 있으면 가능한 한 모두 mentions에 포함하세요(슬라이드당 3개씩
   최대 3슬라이드, 종목당 최대 9개까지 지원). 발언을 임의로 줄이지 마세요.
 
-### quote_narration (TTS 낭독용 — 구어체, 발화자·채널을 부각)
-- 반드시 화자명과 채널명을 먼저 호명하고 시작: "발화자가 있으면 [채널]의 [발화자]는," /
-  없으면 "[채널]에서는,"
-- 발언 내용을 1문장으로 축약하지 말고, stock_quotes의 quote 내용을 최대한 살려
-  2~3문장 분량으로 구체적으로 풀어서 서술하세요 (발언의 근거·수치·전망까지 포함).
+### quote_narration (TTS 낭독용 — 발화자·채널을 부각하고 발언을 인용 형식으로)
+- 반드시 화자명과 채널명을 먼저 호명하고, 발언 내용을 인용 형식으로 이어가세요:
+  "[채널]의 [발화자]는 "(발언 원문을 존댓말로만 다듬어 그대로 인용)"라고 말했습니다." /
+  화자가 없으면 "[채널]에서는 "(발언 원문)"라고 전했습니다."
+- 발언 내용을 요약하거나 1문장으로 축약하지 말고, stock_quotes의 quote 필드 내용을
+  최대한 원문 그대로 살려 2~3문장 분량으로 구체적으로 인용하세요 (근거·수치·전망까지 포함).
+  이 방송의 핵심은 "누가 어떤 채널에서 무엇을 말했는지"이므로 발언을 재해석하지 말고
+  실제로 한 말을 전달한다는 느낌으로 작성하세요.
 - 종결어미 다양화 (같은 어미 2회 연속 금지):
   "~라고 전했습니다" | "~고 분석했습니다" | "~다고 밝혔습니다" | "~라고 진단했습니다"
   "~고 강조했습니다" | "~다고 내다봤습니다" | "~라고 언급했습니다" | "~고 보도했습니다"
   "~다고 전망했습니다" | "~라고 짚었습니다" | "~고 설명했습니다" | "~다고 판단했습니다"
 
-### quote_subtitle (화면 그래픽용 — 문어체 요약)
-- 채널명 미포함, 핵심만 30자 이내, 문어체
-- 나쁜 예: "한국경제TV에서는 현대차가 코스피 6700 돌파를 주도했다고 했습니다."
-- 좋은 예: "코스피 6700 돌파 주도, 단기 과열 리스크 병존"
+### quote_subtitle (화면 카드 본문 — 발언 인용 자체, 헤드라인 축약 금지)
+- 채널명·화자명은 카드 상단 배지에 별도로 크게 표시되므로 본문에는 채널/화자를
+  다시 적지 말고 발언 내용 자체만 적습니다.
+- 30자 헤드라인으로 압축하지 말고, 실제 발언의 핵심 문장을 인용부호(" ")로 감싸
+  50~90자 내외로 구체적으로 제시하세요 (stock_quotes의 quote 필드를 근거로 함).
+- 나쁜 예(과도한 축약): 코스피 6700 돌파 주도, 단기 과열 리스크 병존
+- 좋은 예(발언 인용): "코스피 6700 돌파를 삼성전자가 주도했지만, 단기적으로는 과열
+  신호도 함께 나타나고 있다고 봅니다"
 
 ### 코너 오프닝 멘트 (반드시 포함)
 - opening: "__OPENING__" 플레이스홀더 사용
@@ -672,18 +700,19 @@ def generate_script(
         total_chars += chars
         print(f"  {sid}: {chars:,}자")
     print(f"  ─────────────────")
-    print(f"  합계: {total_chars:,}자  (목표: 3,230자 이상)")
-    if total_chars < 3230:
-        print(f"  ⚠️  분량 부족! {3230 - total_chars:,}자 미달")
+    print(f"  합계: {total_chars:,}자  (목표: 5,800자 이상, 약 320자/분 기준 15분 분량)")
+    if total_chars < 5800:
+        print(f"  ⚠️  분량 부족! {5800 - total_chars:,}자 미달 — 영상 후반부가 무음 패딩으로 "
+              f"채워질 위험이 있습니다")
     else:
         print(f"  ✅ 분량 목표 달성")
 
     market_sec = next((s for s in sections if s.get("id") == "market_summary"), None)
     if market_sec:
         ms_chars = len(market_sec.get("narration", "") or "")
-        if ms_chars > 420:
-            print(f"  ⚠️  market_summary가 목표(350~420자)를 초과했습니다: {ms_chars:,}자 "
-                  f"(약 {ms_chars / 250 * 60:.0f}초 분량 — 1분 30초 목표 초과)")
+        if ms_chars > 600:
+            print(f"  ⚠️  market_summary가 목표(480~600자)를 초과했습니다: {ms_chars:,}자 "
+                  f"(약 {ms_chars / 320 * 60:.0f}초 분량 — 2분 목표 초과)")
 
     return data
 

@@ -6,14 +6,14 @@ generate_assets.py가 기대하는 함수 시그니처/반환값/출력 파일�
 """
 import os
 
-from .config import W, H, classify_channel_type
+from .config import W, H, classify_channel_type, resolve_channel_identity
 from .render import render_html_to_png
 from .html_theme import (
     esc, file_uri, shell, centered_shell, kbs_badge, stat_table,
     point_card, sector_card, bullet_column, quote_bubble, page_dots,
     numbered_bullets_from_text, PALETTE, _ACCENT_CYCLE,
 )
-from .chart import build_chart_image
+from .chart import build_chart_with_insight
 from .image_fetch import fetch_news_image
 
 
@@ -199,15 +199,21 @@ def _build_stock_chart(sec, out_path, img_dir):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
 
     briefing_chart = os.path.join(img_dir, f"briefing_chart_{stock_name}.png")
+    insight = None
     if os.path.exists(briefing_chart):
         chart_path = briefing_chart
         print(f"  [chart] 브리핑 앱 차트 사용: {stock_name}")
     else:
-        chart_path = build_chart_image(stock_name, img_dir)
+        chart_path, insight = build_chart_with_insight(stock_name, img_dir)
 
     if chart_path:
+        insight_html = (
+            f'<div class="corner-summary" style="margin-top:18px;">📈 {esc(insight)}</div>'
+            if insight else ""
+        )
         body = (f'<div class="card" style="padding:20px;text-align:center;">'
-                f'<img src="{file_uri(chart_path)}" style="width:100%;border-radius:12px;"></div>')
+                f'<img src="{file_uri(chart_path)}" style="width:100%;border-radius:12px;"></div>'
+                f'{insight_html}')
     else:
         body = (f'<div class="card" style="height:600px;display:flex;align-items:center;'
                 f'justify-content:center;font-size:34px;color:{PALETTE["muted"]};">'
@@ -242,9 +248,12 @@ def _build_mention_page(sec, out_path, page_idx):
     for mi, m in enumerate(page_mentions):
         if isinstance(m, str):
             m = {"speaker": "", "channel": "", "quote_subtitle": m}
-        speaker = (m.get("speaker") or "").strip()
-        channel = (m.get("channel") or m.get("source") or "").strip()
-        channel_type = m.get("channel_type") or classify_channel_type(channel)
+        raw_speaker = (m.get("speaker") or "").strip()
+        raw_channel = (m.get("channel") or m.get("source") or "").strip()
+        # script.json이 정규화 이전의 원본 channel/speaker를 담고 있을 수 있으므로
+        # 렌더링 직전에도 한 번 더 정리해 배지가 중복 표시되지 않도록 방어한다.
+        channel, speaker = resolve_channel_identity(raw_channel, raw_speaker)
+        channel_type = classify_channel_type(channel)
         content = m.get("quote_subtitle", m.get("quote", m.get("content", "")))
         color = _ACCENT_CYCLE[mi % len(_ACCENT_CYCLE)]
         cards += quote_bubble(channel, speaker, content, color, channel_type)

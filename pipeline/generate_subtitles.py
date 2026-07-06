@@ -255,6 +255,11 @@ def _build_subtitle_map(sections: list, lang: str) -> dict:
                     if sub:
                         subtitle_map[f"{sid}_mention_{p:02d}"] = sub
 
+        elif sid == "closing":
+            # 클로징 슬라이드는 투자 유의사항 전문을 화면에 이미 글자로 표시하므로
+            # (builders.build_closing 참고) 하단 자막을 중복으로 넣지 않는다.
+            continue
+
         else:
             # 일반 섹션
             sub = section.get("subtitle", "")
