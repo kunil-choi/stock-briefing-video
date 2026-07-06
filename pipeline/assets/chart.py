@@ -31,37 +31,89 @@ def _set_korean_font():
 _set_korean_font()
 
 
-def fetch_ohlcv(stock_name: str, days: int = 20) -> Optional[pd.DataFrame]:
-    normalized = normalize_stock_name(stock_name)
-    code = STOCK_CODES.get(normalized)
-    if not code:
-        print(f"  [chart] 종목코드 없음: {stock_name} (정규화: {normalized})")
-        return None
+def _fetch_ohlcv_pykrx(code: str, days: int) -> Optional[pd.DataFrame]:
+    """pykrx(KRX data.krx.co.kr)로 OHLCV 조회. KRX_ID/KRX_PW 환경변수가 없으면
+    최근 pykrx 버전은 예외 없이 빈 DataFrame을 반환하므로 empty 체크가 필수."""
     try:
         from pykrx import stock as krx
         end   = datetime.today().strftime("%Y%m%d")
         start = (datetime.today() - timedelta(days=days * 3)).strftime("%Y%m%d")
         df    = krx.get_market_ohlcv_by_date(start, end, code)
         if df is None or df.empty:
-            print(f"  [chart] 데이터 없음: {stock_name}")
             return None
         df = df.tail(days)
         df.index = pd.to_datetime(df.index)
-
         col_map = {
             "시가": "Open", "고가": "High", "저가": "Low",
             "종가": "Close", "거래량": "Volume"
         }
         df = df.rename(columns=col_map)
-
         for col in ["Open", "High", "Low", "Close", "Volume"]:
             if col not in df.columns:
-                print(f"  [chart] 컬럼 없음: {col}")
                 return None
         return df
     except Exception as e:
-        print(f"  [chart] pykrx 실패 ({stock_name}): {e}")
+        print(f"  [chart] pykrx 실패: {e}")
         return None
+
+
+def _fetch_ohlcv_naver(code: str, days: int) -> Optional[pd.DataFrame]:
+    """네이버 금융 공개 시세 API로 OHLCV 조회 (로그인 불필요, pykrx의 대체 소스).
+    KRX가 data.krx.co.kr 스크래핑에 로그인을 요구하면서 pykrx가 무인증 환경에서
+    항상 빈 데이터를 반환하게 됐기 때문에, 이 소스를 1차 대체 경로로 사용한다."""
+    import ast
+    import requests
+    end   = datetime.today().strftime("%Y%m%d")
+    start = (datetime.today() - timedelta(days=days * 4)).strftime("%Y%m%d")
+    url = "https://api.finance.naver.com/siseJson.naver"
+    params = {
+        "symbol": code, "requestType": "1",
+        "startTime": start, "endTime": end, "timeframe": "day",
+    }
+    try:
+        r = requests.get(url, params=params, timeout=10,
+                          headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        rows = ast.literal_eval(r.text.strip())
+        if not rows or len(rows) < 2:
+            return None
+        header, data_rows = rows[0], rows[1:]
+        df = pd.DataFrame(data_rows, columns=header)
+        df = df.rename(columns={
+            "날짜": "Date", "시가": "Open", "고가": "High",
+            "저가": "Low", "종가": "Close", "거래량": "Volume",
+        })
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            if col not in df.columns:
+                return None
+        df["Date"] = pd.to_datetime(df["Date"], format="%Y%m%d")
+        df = df.set_index("Date").sort_index().tail(days)
+        return df
+    except Exception as e:
+        print(f"  [chart] 네이버 금융 조회 실패: {e}")
+        return None
+
+
+def fetch_ohlcv(stock_name: str, days: int = 20) -> Optional[pd.DataFrame]:
+    normalized = normalize_stock_name(stock_name)
+    code = STOCK_CODES.get(normalized)
+    if not code:
+        print(f"  [chart] 종목코드 없음: {stock_name} (정규화: {normalized})")
+        return None
+
+    df = _fetch_ohlcv_pykrx(code, days)
+    if df is not None and len(df) >= 3:
+        print(f"  [chart] pykrx 데이터 사용: {stock_name}")
+        return df
+
+    print(f"  [chart] pykrx 데이터 없음({stock_name}) → 네이버 금융으로 재시도")
+    df = _fetch_ohlcv_naver(code, days)
+    if df is not None and len(df) >= 3:
+        print(f"  [chart] 네이버 금융 데이터 사용: {stock_name}")
+        return df
+
+    print(f"  [chart] 모든 소스에서 데이터 조회 실패: {stock_name}")
+    return None
 
 
 def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Optional[str]:
@@ -176,7 +228,7 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
 def build_chart_image(stock_name: str, img_dir: str) -> Optional[str]:
     normalized = normalize_stock_name(stock_name)
     save_path  = os.path.join(img_dir, f"chart_{normalized}.png")
-    if os.path.exists(save_path):
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 5000:
         print(f"  [chart] 캐시 사용: {normalized}")
         return save_path
     df = fetch_ohlcv(normalized, days=14)

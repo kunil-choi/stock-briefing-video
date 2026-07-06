@@ -20,7 +20,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-from assets.config import STOCK_CODES, normalize_stock_name
+from assets.config import STOCK_CODES, normalize_stock_name, classify_channel_type
 
 _api_key = os.environ.get("OPENAI_API_KEY")
 if not _api_key:
@@ -61,7 +61,6 @@ CLOSING_NARRATION = (
     "특정 종목의 매수 또는 매도를 권유하는 것이 아니며, 수익을 보장하지 않습니다. "
     "주식 투자는 원금 손실의 위험이 있으므로 반드시 본인의 판단과 책임 하에 신중하게 결정하시기 바랍니다. "
     "투자의 최종 결정과 그에 따른 모든 책임은 전적으로 투자자 본인에게 있습니다. "
-    "케이비에스 머니올라는 투자 결과에 대해 어떠한 법적 책임도 지지 않습니다. "
     "구독과 좋아요는 저희에게 큰 힘이 됩니다. 내일도 유익한 브리핑으로 찾아뵙겠습니다. 감사합니다."
 )
 
@@ -73,7 +72,6 @@ CLOSING_SUBTITLE = (
     "특정 종목의 매수 또는 매도를 권유하는 것이 아니며, 수익을 보장하지 않습니다. "
     "주식 투자는 원금 손실의 위험이 있으므로 반드시 본인의 판단과 책임 하에 신중하게 결정하시기 바랍니다. "
     "투자의 최종 결정과 그에 따른 모든 책임은 전적으로 투자자 본인에게 있습니다. "
-    "KBS 머니올라는 투자 결과에 대해 어떠한 법적 책임도 지지 않습니다. "
     "구독과 좋아요는 저희에게 큰 힘이 됩니다. 내일도 유익한 브리핑으로 찾아뵙겠습니다. 감사합니다."
 )
 
@@ -81,6 +79,171 @@ DISCLAIMER = (
     "⚠️ 투자 유의사항 | 본 브리핑은 AI 분석 참고자료이며 투자 권유가 아닙니다. "
     "주식 투자는 원금 손실 위험이 있습니다. 투자 책임은 전적으로 본인에게 있습니다."
 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 자막 표기 안전망 — narration용 한글 발음/숫자 표기가 subtitle 필드에 잘못
+# 섞여 들어온 경우 자동으로 원래 표기(숫자/로마자)로 되돌립니다.
+# LLM이 프롬프트 지시를 놓쳤을 때의 최종 방어선이며, narration 필드에는
+# 절대 적용하지 않습니다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# narration에서만 쓰이는 필드 — 자막 안전망을 적용하지 않음
+_NARRATION_ONLY_KEYS = {
+    "narration", "narration_summary", "narration_chart",
+    "narration_mention", "quote_narration", "id", "title", "date",
+}
+_NARRATION_MENTION_PAGE_RE = re.compile(r"^narration_mention_\d+$")
+
+# 영문 약어의 한글 발음 표기 → 원래 로마자 표기 (긴 복합어 먼저)
+_ACRONYM_SUBTITLE_FIXES = [
+    ("에이치디현대중공업", "HD현대중공업"),
+    ("에이치디현대일렉트릭", "HD현대일렉트릭"),
+    ("에이치디현대", "HD현대"),
+    ("에스케이하이닉스", "SK하이닉스"),
+    ("엘지에너지솔루션", "LG에너지솔루션"),
+    ("엘지화학", "LG화학"),
+    ("케이비금융", "KB금융"),
+    ("에이치비엠", "HBM"),
+    ("에이아이", "AI"),
+    ("이티에프", "ETF"),
+    ("이에스에스", "ESS"),
+    ("피씨이", "PCE"),
+    ("디에스알", "DSR"),
+    ("오티티", "OTT"),
+    ("에이디알", "ADR"),
+    ("엠오유", "MOU"),
+    ("비피에스", "BPS"),
+    ("이피에스", "EPS"),
+    ("피이알", "PER"),
+    ("알오이", "ROE"),
+    ("아이피오", "IPO"),
+    ("엠앤에이", "M&A"),
+    ("알앤디", "R&D"),
+    ("와이오와이", "YoY"),
+    ("큐오큐", "QoQ"),
+    ("에스케이", "SK"),
+    ("엘지", "LG"),
+    ("케이비", "KB"),
+]
+
+_KR_DIGIT = {"영": 0, "일": 1, "이": 2, "삼": 3, "사": 4,
+             "오": 5, "육": 6, "륙": 6, "칠": 7, "팔": 8, "구": 9}
+_KR_SMALL_UNIT = {"십": 10, "백": 100, "천": 1000}
+_KR_BIG_UNITS = "조억만"
+_KR_NUM_CHARS = "".join(_KR_DIGIT) + "".join(_KR_SMALL_UNIT) + _KR_BIG_UNITS
+
+
+def _parse_kr_number_group(chars: str):
+    """4자리 미만 그룹(예: '이천사백')을 정수로 변환. 실패하면 None."""
+    if not chars:
+        return 0
+    total = 0
+    pending = None
+    for ch in chars:
+        if ch in _KR_DIGIT:
+            pending = _KR_DIGIT[ch]
+        elif ch in _KR_SMALL_UNIT:
+            total += (pending if pending is not None else 1) * _KR_SMALL_UNIT[ch]
+            pending = None
+        else:
+            return None
+    if pending is not None:
+        total += pending
+    return total
+
+
+def _korean_number_run_to_digits(run: str):
+    """'십이조이천사백억' → '12조2400억' 처럼 조/억/만 단위는 유지한 채 각 자릿수
+    구간만 아라비아 숫자로 변환합니다. 파싱 실패 시 None을 반환합니다."""
+    parts = re.split(r"([조억만])", run)
+    out, i = [], 0
+    while i < len(parts):
+        seg = parts[i]
+        if i + 1 < len(parts) and parts[i + 1] in "조억만":
+            val = _parse_kr_number_group(seg)
+            if val is None:
+                return None
+            out.append(f"{val}{parts[i + 1]}")
+            i += 2
+        else:
+            if seg:
+                val = _parse_kr_number_group(seg)
+                if val is None:
+                    return None
+                out.append(str(val))
+            i += 1
+    return "".join(out) if out else None
+
+
+_DECIMAL_PERCENT_RE = re.compile(
+    r"([영일이삼사오육륙칠팔구]+)쩜([영일이삼사오육륙칠팔구]+)퍼센트"
+)
+
+
+def _fix_decimal_percent(text: str) -> str:
+    """'십이쩜오퍼센트' → '12.5%' / '영쩜팔퍼센트' → '0.8%'"""
+    def repl(m):
+        int_val = _parse_kr_number_group(m.group(1))
+        dec_str = "".join(str(_KR_DIGIT[c]) for c in m.group(2))
+        if int_val is None or not dec_str:
+            return m.group(0)
+        return f"{int_val}.{dec_str}%"
+    return _DECIMAL_PERCENT_RE.sub(repl, text)
+
+
+_PLAIN_NUMBER_RE = re.compile(
+    f"([{_KR_NUM_CHARS}]+)(원|퍼센트|포인트|배)?"
+)
+
+
+def _fix_plain_numbers(text: str) -> str:
+    """'삼천오백원' → '3500원' 처럼 뒤에 단위가 붙거나 조/억/만으로 끝나
+    명백히 숫자로 판단되는 경우만 변환합니다 (오탐 방지를 위해 최소 2글자 +
+    십/백/천/만/억/조 중 하나를 포함하고, 단위 앵커가 있어야만 변환)."""
+    def repl(m):
+        run, trailing = m.group(1), m.group(2) or ""
+        self_anchored = run[-1] in _KR_BIG_UNITS
+        if len(run) < 2 or not any(c in "십백천만억조" for c in run):
+            return m.group(0)
+        if not trailing and not self_anchored:
+            return m.group(0)
+        converted = _korean_number_run_to_digits(run)
+        if converted is None:
+            return m.group(0)
+        trailing_out = "%" if trailing == "퍼센트" else trailing
+        return converted + trailing_out
+    return _PLAIN_NUMBER_RE.sub(repl, text)
+
+
+def fix_subtitle_text(text: str) -> str:
+    """자막(subtitle) 필드에 섞여 들어온 narration용 한글 발음/숫자 표기를
+    원래의 숫자·로마자 표기로 되돌립니다. narration 필드에는 절대 호출하지 마세요."""
+    if not text or not isinstance(text, str):
+        return text
+    try:
+        fixed = text
+        for src, dst in _ACRONYM_SUBTITLE_FIXES:
+            fixed = fixed.replace(src, dst)
+        fixed = _fix_decimal_percent(fixed)
+        fixed = _fix_plain_numbers(fixed)
+        return fixed
+    except Exception:
+        return text
+
+
+def fix_subtitle_fields(obj, key: str = None):
+    """script.json 트리를 순회하며 narration 계열이 아닌 모든 문자열 필드에
+    fix_subtitle_text()를 적용합니다."""
+    if isinstance(obj, dict):
+        return {k: fix_subtitle_fields(v, k) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [fix_subtitle_fields(v, key) for v in obj]
+    if isinstance(obj, str):
+        if key in _NARRATION_ONLY_KEYS or (key and _NARRATION_MENTION_PAGE_RE.match(key)):
+            return obj
+        return fix_subtitle_text(obj)
+    return obj
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,9 +319,10 @@ def fetch_youtube_mentions() -> list:
 
 def build_stock_quotes(mentions: list, briefing_date_iso: str) -> dict:
     """
-    종목명을 정규화해 stock_name → [{speaker, channel, quote, timestamp_url, sentiment}] 로 그룹핑.
+    종목명을 정규화해 stock_name → [{speaker, channel, channel_type, quote, timestamp_url, sentiment}] 로 그룹핑.
     briefing_date_iso가 있으면 같은 날짜의 발언만 사용 (V3 브리핑과 날짜 어긋남 방지).
-    종목당 최대 3개 발언만 유지해 narration 분량을 통제한다.
+    mention 슬라이드는 최대 3슬라이드(슬라이드당 3개)까지 지원하므로 종목당 최대 9개 발언까지 유지해
+    출연진의 발언을 최대한 폭넓게 다룬다 (요구사항: 방송/유튜브 전문가 발언 종합이 이 영상의 핵심 목적).
     """
     grouped: dict = {}
     for m in mentions:
@@ -168,14 +332,16 @@ def build_stock_quotes(mentions: list, briefing_date_iso: str) -> dict:
         if not raw_name:
             continue
         name = normalize_stock_name(raw_name)
+        channel = m.get("channel", "")
         grouped.setdefault(name, []).append({
             "speaker":       m.get("speaker") or m.get("main_speaker", ""),
-            "channel":       m.get("channel", ""),
+            "channel":       channel,
+            "channel_type":  classify_channel_type(channel),
             "quote":         m.get("quote", ""),
             "timestamp_url": m.get("timestamp_url") or m.get("video_url", ""),
             "sentiment":     m.get("sentiment", ""),
         })
-    return {name: items[:3] for name, items in grouped.items()}
+    return {name: items[:9] for name, items in grouped.items()}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -195,41 +361,62 @@ def generate_script(
 
 ## ★ 15분 영상 분량 설계 (반드시 준수)
 한국어 TTS 낭독 속도 기준: 1분 = 약 250자
-전체 목표: 오프닝+클로징 고정 텍스트 포함 총 3,750자 이상
+전체 목표: 오프닝+클로징 고정 텍스트 포함 총 3,230자 이상
 
 ### 섹션별 narration 목표 글자 수 (공백 포함):
-- market_summary : 900자 이상 (약 3분 30초)
-  → KOSPI, KOSDAQ, 주요 지수 전반 흐름을 깊이 있게 설명. 배경·원인·투자자 반응까지 포함.
+- market_summary : 350~420자 (목표 1분 30초, 이 범위를 반드시 지킬 것 — 초과 금지)
+  → KOSPI·KOSDAQ·해외지수·환율 수치와 등락 방향, 가장 핵심적인 원인 1~2가지만 짚고 마무리.
+    개별 업종·종목 관련 상세 설명은 여기서 하지 말고 다음 코너(sectors, 종목 분석)로 넘길 것.
+    900자 이상으로 장황하게 서술했던 과거 방식은 금지 — 간결하게 핵심 수치와 흐름만 전달.
 
 - sectors : 800자 이상 (약 3분)
   → hot_sectors 각 섹터를 3~5문장으로 충분히 설명.
+  → market_summary에서 이미 언급한 지수 수치·환율·전반적 시황 코멘트는 반복하지 말 것.
+    업종별 개별 동인(수급, 실적, 정책, 해외 이슈 등)과 관련 종목·테마 흐름 등
+    market_summary에서 다루지 않은 새로운 내용 위주로 서술.
 
 - 각 stock 섹션 narration : 600자 이상
   → summary, catalyst, risk, mention 모두 포함. 종목별로 구체적 수치와 전망까지 서술.
+  → narration_mention(전문가 발언 소개) 분량이 narration_summary보다 짧아지지 않도록 하세요.
+    이 코너의 핵심은 "누가 무엇을 말했는지"이므로 mention 분량을 가장 충실하게 작성합니다.
 
 - stock_추가관심종목 : 종목 수에 비례 (종목당 최소 60자, 전체 200자 이상)
   → "다음은 오늘의 추가 관심 종목입니다."로 시작.
     stocks 배열에서 개별 섹션으로 다루지 않은 나머지 종목을 전부 소개.
     각 종목: 등락 방향 + 핵심 이유 1가지 + 전망 한 문장.
+  → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고). 전체 시간이 부족하면 items 중 관심도가
+    낮은 하위 종목들만 따로 "추가 관심 종목"으로 분리해 다뤄도 좋습니다.
 
 - stock_오늘의픽 : hidden_picks 데이터가 있을 때만 생성 (전체 200자 이상)
   → "오늘의 숨은 픽을 소개합니다."로 시작.
     hidden_picks 종목 각각을 2~3문장으로 소개.
     hidden_picks가 비어 있으면 이 섹션 자체를 JSON에 포함하지 말 것.
+  → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고).
 
 - stock_증권사리포트 : brokerage_reports 데이터가 있을 때만 생성 (전체 200자 이상)
   → "증권사 리포트에서 주목한 종목을 살펴보겠습니다."로 시작.
     동시언급 종목은 "여러 증권사에서 동시에 주목한 [종목명]입니다."로 소개.
     커버리지 개시 종목은 "[증권사]가 [종목명]에 대한 커버리지를 새로 시작했습니다."로 소개.
     brokerage_reports가 없거나 비어 있으면 이 섹션 자체를 JSON에 포함하지 말 것.
+  → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고).
+
+### 집계형 섹션 items 규칙 (stock_추가관심종목 / stock_오늘의픽 / stock_증권사리포트 공통)
+- narration/subtitle 전체 문단과 별도로, 종목 1개당 items 배열 원소 1개를 반드시 만드세요.
+  문장 단위가 아니라 종목 단위로 나눠야 화면에 종목별로 정확히 번호가 매겨집니다.
+  예: [{{"name": "종목명", "text": "이 종목 한 개에 대한 2~3문장 설명"}}, ...]
+- items의 개수와 순서는 narration에서 종목을 언급한 개수·순서와 반드시 일치해야 합니다.
+- 문장마다 번호를 매기지 말고, 반드시 종목(items 원소)마다 번호가 매겨지도록 하세요.
 
 - ai_strategy : 600자 이상 (약 2분 20초)
   → 오늘 시장 흐름을 종합한 투자 전략을 구체적으로 서술.
 
 ### 분량 검증 규칙:
 - 각 섹션 narration을 작성한 뒤 글자 수를 스스로 확인하세요.
-- 목표치에 미달하면 반드시 추가 설명을 붙여 목표치를 채우세요.
-- "간략히", "짧게", "요약하면" 같은 표현으로 내용을 줄이지 마세요.
+- market_summary를 제외한 섹션은 목표치에 미달하면 반드시 추가 설명을 붙여 목표치를 채우세요.
+- market_summary는 350~420자 범위를 반드시 지키세요. 420자를 넘기면 문장을 줄여서 범위 안으로
+  맞추고, 부족한 배경 설명은 sectors나 종목 분석 섹션으로 옮기세요.
+- "간략히", "짧게", "요약하면" 같은 표현으로 내용을 줄이지 마세요 (단, market_summary의 420자
+  상한 준수를 위한 문장 압축은 예외).
 
 ## ★ 종목 선별 기준
 - market_leaders (2개): 반드시 모두 포함, summary+chart+mention 슬라이드 구성
@@ -259,7 +446,7 @@ def generate_script(
   · 12.5% → 십이쩜오퍼센트  |  0.8% → 영쩜팔퍼센트
 - 영문 약어를 한글 발음으로:
   · SK→에스케이 | LG→엘지 | KB→케이비 | AI→에이아이 | HBM→에이치비엠
-  · ETF→이티에프 | ESS→이에스에스 | PCE→피씨이 | DSR→디에스알
+  · ETF→이티에프 | ESS→이에스에스 | PCE→피씨이 | DSR→디에스알 | OTT→오티티
   · KOSPI→코스피 | KOSDAQ→코스닥 | MOU→엠오유 | ADR→에이디알
 - 경음화 규칙:
   · 주가→주까 | 목표주가→목표주까 | 유가→유까 | 고유가→고유까
@@ -269,15 +456,23 @@ def generate_script(
 - 삼성전기 → "삼성 전기" (TTS 오독 방지, 자막은 원래대로)
 - 숫자+단위 붙여 읽기: 170만원→백칠십만원 (절대 "백칠십만 원" 금지)
 
-### [subtitle — 화면 자막용]
-- 숫자는 아라비아 숫자 그대로 (예: 6,700 / 1.2%)
-- 영문 약어는 원래 표기 그대로 (AI, HBM, ETF 등)
-- 기업명은 원래 표기 그대로
+### [subtitle — 화면 자막용] — 절대 규칙 (narration을 그대로 베끼지 말 것)
+- 숫자는 반드시 아라비아 숫자 그대로 표기:
+  · 6,700 (❌ 육천칠백)  |  3,500원 (❌ 삼천오백원)  |  1.2% (❌ 일쩜이퍼센트)
+  · 12조2400억 (❌ 십이조 이천사백억)
+- 영문 약어·기업명은 반드시 원래 로마자 표기 그대로:
+  · SK (❌ 에스케이)  |  AI (❌ 에이아이)  |  OTT (❌ 오티티)  |  LG (❌ 엘지)
+  · KB (❌ 케이비)  |  HBM (❌ 에이치비엠)  |  ETF (❌ 이티에프)
+- narration 필드를 작성한 뒤 숫자·영문 부분을 한글 발음으로 바꿔 놓았다면, subtitle
+  필드에는 그 발음 표기를 절대 복사하지 말고 반드시 원래 숫자·로마자로 다시 바꿔서 쓰세요.
 - 뜻이 생소한 용어는 **(뜻)** 을 괄호 안에 병기:
   · HBM(고대역폭 메모리) | PER(주가수익비율) | DSR(총부채원리금상환비율)
-  · MOU(업무협약) | ADR(미국주식예탁증서) | PCE(개인소비지출) | ESS(에너지저장장치)
+  · MOU(업무협약) | ADR(미국주식예탁증서) | PCE(개인소비지출) | ESS(에너지저장장치) | OTT(온라인 동영상 서비스)
 
-## ★ mention 항목 규칙
+## ★ mention 항목 규칙 — 이 방송의 핵심 목적
+이 방송은 유튜브·증권방송에 출연한 전문가들이 각 종목에 대해 실제로 무엇을 말했는지
+종합 정리해 전달하는 것이 가장 중요한 목적입니다. 종목 설명 자체보다 "누가, 어떤
+채널에서, 무엇을 말했는지"에 더 많은 시간과 비중을 할애하세요.
 
 ### 실제 발언 근거 (반드시 준수 — 지어내기 금지)
 - 아래 별도 제공되는 stock_quotes(JSON)에 해당 종목명이 있으면, 그 안의 speaker/channel/quote를
@@ -285,9 +480,14 @@ def generate_script(
   적용하고, 발언의 내용·수치·논조는 절대 새로 창작하거나 다른 뜻으로 바꾸지 마세요.
 - 해당 종목이 stock_quotes에 없으면 mentions 배열은 비워두거나 필드 자체를 생략하세요.
   없는 발언을 지어내는 것보다 mentions를 생략하는 것이 낫습니다.
+- stock_quotes에 여러 발언이 있으면 가능한 한 모두 mentions에 포함하세요(슬라이드당 3개씩
+  최대 3슬라이드, 종목당 최대 9개까지 지원). 발언을 임의로 줄이지 마세요.
 
-### quote_narration (TTS 낭독용 — 구어체)
-- 채널명을 먼저 호명: "발화자가 있으면 [채널]의 [발화자]는," / 없으면 "[채널]에서는,"
+### quote_narration (TTS 낭독용 — 구어체, 발화자·채널을 부각)
+- 반드시 화자명과 채널명을 먼저 호명하고 시작: "발화자가 있으면 [채널]의 [발화자]는," /
+  없으면 "[채널]에서는,"
+- 발언 내용을 1문장으로 축약하지 말고, stock_quotes의 quote 내용을 최대한 살려
+  2~3문장 분량으로 구체적으로 풀어서 서술하세요 (발언의 근거·수치·전망까지 포함).
 - 종결어미 다양화 (같은 어미 2회 연속 금지):
   "~라고 전했습니다" | "~고 분석했습니다" | "~다고 밝혔습니다" | "~라고 진단했습니다"
   "~고 강조했습니다" | "~다고 내다봤습니다" | "~라고 언급했습니다" | "~고 보도했습니다"
@@ -384,6 +584,16 @@ def generate_script(
       ]
     }},
     {{
+      "id": "stock_추가관심종목",
+      "label": "추가 관심 종목",
+      "corner_summary": "추가 관심 종목 한줄 요약",
+      "narration": "다음은 오늘의 추가 관심 종목입니다. ...",
+      "subtitle": "다음은 오늘의 추가 관심 종목입니다. ...",
+      "items": [
+        {{"name": "종목명", "text": "이 종목 1개에 대한 2~3문장 설명(등락 방향+이유+전망)"}}
+      ]
+    }},
+    {{
       "id": "ai_strategy",
       "label": "AI 투자 전략",
       "corner_summary": "오늘의 AI 전략 핵심 요약",
@@ -445,6 +655,7 @@ def generate_script(
         return obj
 
     data = _replace(data)
+    data = fix_subtitle_fields(data)
 
     # ── 분량 검증 로그 ──────────────────────────────────────────────────────
     sections = data.get("sections", [])
@@ -461,11 +672,18 @@ def generate_script(
         total_chars += chars
         print(f"  {sid}: {chars:,}자")
     print(f"  ─────────────────")
-    print(f"  합계: {total_chars:,}자  (목표: 3,750자 이상)")
-    if total_chars < 3750:
-        print(f"  ⚠️  분량 부족! {3750 - total_chars:,}자 미달")
+    print(f"  합계: {total_chars:,}자  (목표: 3,230자 이상)")
+    if total_chars < 3230:
+        print(f"  ⚠️  분량 부족! {3230 - total_chars:,}자 미달")
     else:
         print(f"  ✅ 분량 목표 달성")
+
+    market_sec = next((s for s in sections if s.get("id") == "market_summary"), None)
+    if market_sec:
+        ms_chars = len(market_sec.get("narration", "") or "")
+        if ms_chars > 420:
+            print(f"  ⚠️  market_summary가 목표(350~420자)를 초과했습니다: {ms_chars:,}자 "
+                  f"(약 {ms_chars / 250 * 60:.0f}초 분량 — 1분 30초 목표 초과)")
 
     return data
 

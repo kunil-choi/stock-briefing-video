@@ -6,7 +6,7 @@ generate_assets.py가 기대하는 함수 시그니처/반환값/출력 파일�
 """
 import os
 
-from .config import W, H
+from .config import W, H, classify_channel_type
 from .render import render_html_to_png
 from .html_theme import (
     esc, file_uri, shell, centered_shell, kbs_badge, stat_table,
@@ -244,9 +244,10 @@ def _build_mention_page(sec, out_path, page_idx):
             m = {"speaker": "", "channel": "", "quote_subtitle": m}
         speaker = (m.get("speaker") or "").strip()
         channel = (m.get("channel") or m.get("source") or "").strip()
+        channel_type = m.get("channel_type") or classify_channel_type(channel)
         content = m.get("quote_subtitle", m.get("quote", m.get("content", "")))
         color = _ACCENT_CYCLE[mi % len(_ACCENT_CYCLE)]
-        cards += quote_bubble(channel, speaker, content, color)
+        cards += quote_bubble(channel, speaker, content, color, channel_type)
 
     body = (f'<div style="display:flex;flex-direction:column;gap:20px;">{cards}</div>'
             + page_dots(total_pages, page_idx))
@@ -294,18 +295,36 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
 
 def _build_aggregate_stock_slide(sec, out_dir, filename, title):
     corner_summary = sec.get("corner_summary", "")
-    body_text = sec.get("subtitle", sec.get("narration", ""))
-
     corner_html = (
         f'<div class="corner-summary">{esc(corner_summary)}</div>' if corner_summary else ""
     )
 
-    bullets = numbered_bullets_from_text(body_text, max_items=8)
-    cards = "".join(
-        point_card(i + 1, b, _ACCENT_CYCLE[i % len(_ACCENT_CYCLE)])
-        for i, b in enumerate(bullets)
-    )
-    body_html = f'<div style="display:flex;flex-direction:column;gap:14px;">{cards}</div>'
+    items = sec.get("items", [])
+    if items:
+        # 종목(items) 단위로 번호를 매김 — 문장 단위 분할과 달리 번호가 항상 종목과 1:1 대응
+        labels = []
+        for it in items:
+            if isinstance(it, dict):
+                name = (it.get("name") or "").strip()
+                text = (it.get("text") or "").strip()
+                labels.append(f"{name}: {text}" if name else text)
+            else:
+                labels.append(str(it))
+        cards = "".join(
+            point_card(i + 1, b, _ACCENT_CYCLE[i % len(_ACCENT_CYCLE)])
+            for i, b in enumerate(labels)
+        )
+        layout = "grid;grid-template-columns:1fr 1fr" if len(labels) > 5 else "flex;flex-direction:column"
+        body_html = f'<div style="display:{layout};gap:14px;">{cards}</div>'
+    else:
+        # items가 없는 경우(레거시/누락 대비): 문장 단위로만 분할해 표시
+        body_text = sec.get("subtitle", sec.get("narration", ""))
+        bullets = numbered_bullets_from_text(body_text, max_items=8)
+        cards = "".join(
+            point_card(i + 1, b, _ACCENT_CYCLE[i % len(_ACCENT_CYCLE)])
+            for i, b in enumerate(bullets)
+        )
+        body_html = f'<div style="display:flex;flex-direction:column;gap:14px;">{cards}</div>'
 
     content = f"{corner_html}{body_html}"
     html = shell(title, content)
