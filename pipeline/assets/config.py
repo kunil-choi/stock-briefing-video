@@ -1,5 +1,6 @@
 # pipeline/assets/config.py
 import os
+import re
 
 W, H = 1920, 1080
 
@@ -205,6 +206,44 @@ def classify_channel_type(channel: str) -> str:
         if known.lower() in name.lower() or name.lower() in known.lower():
             return "경제방송"
     return "유튜브"
+
+
+# 일부 소스 데이터는 channel 필드에 실제 채널명 대신 "유튜브"/"경제방송" 같은
+# 대분류 값만 담아 보내고, 실제 채널명은 speaker(main_speaker) 필드에 넣어 둔다.
+# 이를 그대로 렌더링하면 channel_type 배지와 channel 배지가 똑같은 문구로 중복
+# 표시되는 문제가 생기므로, 아래 함수로 정규화한다.
+_COARSE_CHANNEL_LABELS = {"유튜브", "youtube", "유튜브채널", "유튜브 채널", "경제방송", "증권방송", "방송"}
+
+
+def _is_coarse_channel_label(text: str) -> bool:
+    return (text or "").strip().lower() in {lbl.lower() for lbl in _COARSE_CHANNEL_LABELS}
+
+
+def resolve_channel_identity(channel: str, speaker: str):
+    """
+    channel/speaker 필드 표기가 뒤섞인 소스 데이터를 정규화합니다.
+    - channel 문자열에 대분류 단어가 섞여 있으면 제거해 실제 채널명만 남깁니다
+      (예: "이데일리TV 유튜브" → "이데일리TV").
+    - channel이 대분류 단어 자체이고 speaker에 실제 채널명이 들어온 경우,
+      그 값을 channel로 승격시키고 speaker는 미상으로 비웁니다
+      (예: channel="유튜브", speaker="815머니톡" → channel="815머니톡", speaker="").
+    반환: (channel, speaker) 정리된 튜플.
+    """
+    channel = (channel or "").strip()
+    speaker = (speaker or "").strip()
+
+    cleaned = channel
+    for label in _COARSE_CHANNEL_LABELS:
+        cleaned = re.sub(rf"\s*[\(\[]?\s*{re.escape(label)}\s*[\)\]]?\s*", " ",
+                          cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip()
+
+    if cleaned:
+        channel = cleaned
+    elif speaker and _is_coarse_channel_label(channel):
+        channel, speaker = speaker, ""
+
+    return channel, speaker
 
 
 NEWS_IMAGE_FALLBACKS = {

@@ -90,7 +90,39 @@ def _fetch_ohlcv_naver(code: str, days: int) -> Optional[pd.DataFrame]:
         df = df.set_index("Date").sort_index().tail(days)
         return df
     except Exception as e:
-        print(f"  [chart] 네이버 금융 조회 실패: {e}")
+        print(f"  [chart] 네이버 금융(siseJson) 조회 실패: {e}")
+        return None
+
+
+def _fetch_ohlcv_naver_fchart(code: str, days: int) -> Optional[pd.DataFrame]:
+    """네이버 금융 구버전 fchart XML API (siseJson과 별개 서버/포맷의 무인증 소스).
+    siseJson이 차단되거나 포맷이 바뀌는 경우를 대비한 2차 대체 경로."""
+    import xml.etree.ElementTree as ET
+    import requests
+    url = "https://fchart.stock.naver.com/sise.nhn"
+    params = {"symbol": code, "timeframe": "day", "count": str(days * 4), "requestType": "0"}
+    try:
+        r = requests.get(url, params=params, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://finance.naver.com/",
+        })
+        r.raise_for_status()
+        root = ET.fromstring(r.content)
+        rows = []
+        for item in root.iter("item"):
+            parts = (item.attrib.get("data") or "").split("|")
+            if len(parts) >= 6:
+                rows.append(parts[:6])
+        if not rows:
+            return None
+        df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+        for col in ["Open", "High", "Low", "Close", "Volume"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["Date"] = pd.to_datetime(df["Date"], format="%Y%m%d", errors="coerce")
+        df = df.dropna(subset=["Date", "Close"]).set_index("Date").sort_index().tail(days)
+        return df
+    except Exception as e:
+        print(f"  [chart] 네이버 금융(fchart) 조회 실패: {e}")
         return None
 
 
@@ -106,10 +138,16 @@ def fetch_ohlcv(stock_name: str, days: int = 20) -> Optional[pd.DataFrame]:
         print(f"  [chart] pykrx 데이터 사용: {stock_name}")
         return df
 
-    print(f"  [chart] pykrx 데이터 없음({stock_name}) → 네이버 금융으로 재시도")
+    print(f"  [chart] pykrx 데이터 없음({stock_name}) → 네이버 금융(siseJson)으로 재시도")
     df = _fetch_ohlcv_naver(code, days)
     if df is not None and len(df) >= 3:
-        print(f"  [chart] 네이버 금융 데이터 사용: {stock_name}")
+        print(f"  [chart] 네이버 금융(siseJson) 데이터 사용: {stock_name}")
+        return df
+
+    print(f"  [chart] 네이버 금융(siseJson) 실패({stock_name}) → 네이버 금융(fchart)으로 재시도")
+    df = _fetch_ohlcv_naver_fchart(code, days)
+    if df is not None and len(df) >= 3:
+        print(f"  [chart] 네이버 금융(fchart) 데이터 사용: {stock_name}")
         return df
 
     print(f"  [chart] 모든 소스에서 데이터 조회 실패: {stock_name}")
@@ -225,14 +263,60 @@ def draw_candle_chart(df: pd.DataFrame, stock_name: str, save_path: str) -> Opti
         return None
 
 
-def build_chart_image(stock_name: str, img_dir: str) -> Optional[str]:
+def build_chart_insight(df: pd.DataFrame) -> Optional[str]:
+    """2주간 OHLCV로 간단한 차트 분석법 기반 코멘트를 생성합니다.
+    등락폭이 미미하고 이동평균·거래량에서도 뚜렷한 신호가 없으면 None을 반환해
+    의미 없는 코멘트를 억지로 붙이지 않습니다."""
+    if df is None or len(df) < 5:
+        return None
+    try:
+        closes = df["Close"].astype(float)
+        first_close, last_close = closes.iloc[0], closes.iloc[-1]
+        if first_close <= 0:
+            return None
+        change_pct = (last_close - first_close) / first_close * 100
+
+        ma_window = min(5, len(closes) - 1) or 1
+        ma = closes.rolling(ma_window).mean().iloc[-1]
+        above_ma = last_close >= ma
+
+        vol = df["Volume"].astype(float)
+        half = max(1, len(vol) // 2)
+        prior_vol, recent_vol = vol.iloc[:half].mean(), vol.iloc[half:].mean()
+        vol_up = prior_vol > 0 and recent_vol / prior_vol >= 1.3
+        vol_down = prior_vol > 0 and recent_vol / prior_vol <= 0.7
+
+        significant_move = abs(change_pct) >= 3.0
+        if not significant_move and not vol_up and not vol_down:
+            return None  # 의미 있는 신호 없음 → 코멘트 생략
+
+        parts = []
+        if significant_move:
+            direction = "상승" if change_pct > 0 else "하락"
+            parts.append(f"2주간 {change_pct:+.1f}% {direction}")
+        parts.append(f"{ma_window}일 이동평균선 {'위' if above_ma else '아래'}에서 거래 중")
+        if vol_up:
+            parts.append("최근 거래량 증가 동반")
+        elif vol_down:
+            parts.append("최근 거래량 감소")
+        return ", ".join(parts)
+    except Exception as e:
+        print(f"  [chart] 차트 분석 코멘트 생성 실패: {e}")
+        return None
+
+
+def build_chart_with_insight(stock_name: str, img_dir: str):
+    """차트 이미지 경로와 (의미가 있을 때만) 차트 분석 코멘트를 함께 반환합니다.
+    반환: (path_or_None, insight_text_or_None)"""
     normalized = normalize_stock_name(stock_name)
     save_path  = os.path.join(img_dir, f"chart_{normalized}.png")
     if os.path.exists(save_path) and os.path.getsize(save_path) > 5000:
         print(f"  [chart] 캐시 사용: {normalized}")
-        return save_path
+        return save_path, None
     df = fetch_ohlcv(normalized, days=14)
     if df is None or len(df) < 3:
         print(f"  [chart] 데이터 부족: {normalized}")
-        return None
-    return draw_candle_chart(df, normalized, save_path)
+        return None, None
+    path = draw_candle_chart(df, normalized, save_path)
+    insight = build_chart_insight(df) if path else None
+    return path, insight
