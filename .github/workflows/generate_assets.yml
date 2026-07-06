@@ -42,7 +42,9 @@ jobs:
             matplotlib \
             pandas \
             mplfinance \
-            python-dotenv
+            python-dotenv \
+            playwright
+          playwright install --with-deps chromium
 
       - name: 📥 script artifact 다운로드
         uses: dawidd6/action-download-artifact@v3
