@@ -8,8 +8,10 @@ import os
 import re
 import html as _he
 from datetime import date
+from .config import SUBTITLE_ZONE_TOP
 
 W, H = 1920, 1080
+SUBTITLE_BAR_H = H - SUBTITLE_ZONE_TOP  # 화면 하단 자막 전용 고정 여백(px). 슬라이드 콘텐츠는 이 영역을 절대 침범하지 않음.
 
 PALETTE = {
     "bg":           "#faf9f6",
@@ -69,14 +71,14 @@ body{{
 .topbar .divider{{width:2px; height:40px; background:{PALETTE['border']}; margin-right:28px;}}
 .topbar .label{{font-weight:800; font-size:36px; color:{PALETTE['ink']}; flex:1;}}
 .topbar .date{{font-weight:600; font-size:24px; color:{PALETTE['muted']};}}
-.bottombar{{
-  position:absolute; left:0; bottom:0; width:{W}px; height:60px;
-  display:flex; align-items:center; justify-content:space-between;
-  padding:0 40px; background:{PALETTE['card']}; border-top:1px solid {PALETTE['border']};
+.subtitle-zone{{
+  position:absolute; left:0; bottom:0; width:{W}px; height:{SUBTITLE_BAR_H}px;
+  background:linear-gradient(180deg, rgba(22,24,29,0) 0%, rgba(22,24,29,.55) 45%, rgba(22,24,29,.55) 100%);
 }}
-.bottombar .disclaimer{{font-size:17px; color:{PALETTE['muted']};}}
-.bottombar .tag{{font-size:19px; font-weight:700; color:{PALETTE['accent']};}}
-.content{{position:absolute; left:56px; right:56px; top:120px; bottom:84px;}}
+.subtitle-zone .tag{{
+  position:absolute; top:14px; right:40px; font-size:18px; font-weight:700; color:#fff; opacity:.85;
+}}
+.content{{position:absolute; left:56px; right:56px; top:120px; bottom:{SUBTITLE_BAR_H + 24}px;}}
 .card{{
   background:{PALETTE['card']}; border:1px solid {PALETTE['border']};
   border-radius:20px; box-shadow:0 10px 28px {PALETTE['shadow']};
@@ -102,7 +104,7 @@ body{{
 def shell(topbar_label: str, content_html: str, stock_tag: str = "",
           date_str: str = "") -> str:
     date_str = date_str or date.today().strftime("%Y.%m.%d")
-    tag_html = f'<div class="tag">#{esc(stock_tag)}</div>' if stock_tag else '<div></div>'
+    tag_html = f'<div class="tag">#{esc(stock_tag)}</div>' if stock_tag else ""
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>{BASE_CSS}</style></head>
 <body><div class="stage">
   <div class="topbar">
@@ -113,27 +115,21 @@ def shell(topbar_label: str, content_html: str, stock_tag: str = "",
     <div class="date">{esc(date_str)}</div>
   </div>
   <div class="content">{content_html}</div>
-  <div class="bottombar">
-    <div class="disclaimer">본 브리핑은 AI 분석 참고자료이며 투자 권유가 아닙니다. 주식 투자에는 원금 손실 위험이 있으며, 최종 투자 결정과 책임은 본인에게 있습니다.</div>
-    {tag_html}
-  </div>
+  <div class="subtitle-zone">{tag_html}</div>
 </div></body></html>"""
 
 
 def centered_shell(content_html: str) -> str:
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>{BASE_CSS}
 .center-wrap{{
-  position:absolute; left:0; top:0; width:{W}px; height:{H-60}px;
+  position:absolute; left:0; top:0; width:{W}px; height:{H - SUBTITLE_BAR_H}px;
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   text-align:center; gap:22px;
 }}
 </style></head>
 <body><div class="stage">
   <div class="center-wrap">{content_html}</div>
-  <div class="bottombar">
-    <div class="disclaimer">본 브리핑은 AI 분석 참고자료이며 투자 권유가 아닙니다. 주식 투자에는 원금 손실 위험이 있으며, 최종 투자 결정과 책임은 본인에게 있습니다.</div>
-    <div></div>
-  </div>
+  <div class="subtitle-zone"></div>
 </div></body></html>"""
 
 
@@ -209,13 +205,27 @@ def bullet_column(title: str, items: list, color: str) -> str:
 </div>"""
 
 
-def quote_bubble(channel: str, speaker: str, text: str, color: str) -> str:
-    header_parts = [p for p in (channel, speaker) if p]
-    header = "  ·  ".join(header_parts)
+def quote_bubble(channel: str, speaker: str, text: str, color: str,
+                  channel_type: str = "") -> str:
+    type_html = (
+        f'<span class="pill" style="background:{PALETTE["ink"]};color:#fff;'
+        f'font-size:18px;padding:4px 14px;margin-right:10px;">{esc(channel_type)}</span>'
+        if channel_type else ""
+    )
+    channel_html = (
+        f'<span class="pill" style="background:{color}1a;color:{color};'
+        f'font-size:22px;padding:6px 18px;">{esc(channel)}</span>'
+        if channel else ""
+    )
+    speaker_html = (
+        f'<span style="font-size:28px;font-weight:800;color:{PALETTE["ink"]};margin-left:14px;">'
+        f'{esc(speaker)}</span>'
+        if speaker else ""
+    )
     header_html = (
-        f'<div class="pill" style="background:{color}1a;color:{color};'
-        f'font-size:22px;padding:6px 18px;margin-bottom:14px;">{esc(header)}</div>'
-        if header else ""
+        f'<div style="display:flex;align-items:center;margin-bottom:16px;">'
+        f'{type_html}{channel_html}{speaker_html}</div>'
+        if (channel_type or channel or speaker) else ""
     )
     return f"""
 <div class="card" style="border-left:8px solid {color};padding:26px 30px;position:relative;">

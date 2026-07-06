@@ -3,8 +3,8 @@ import os
 
 W, H = 1920, 1080
 
-SUBTITLE_ZONE_TOP = 900    # 자막 전용 영역 시작 Y좌표 (하단 180px)
-CONTENT_ZONE_BOTTOM = 900  # 콘텐츠가 침범하면 안 되는 Y좌표
+SUBTITLE_ZONE_TOP = 890  # 자막 전용 영역 시작 Y좌표(하단 190px 고정 여백). 콘텐츠(카드/차트/표)는
+                          # 이 Y좌표 아래로 내려가면 안 되고, 자막은 이 영역 안에서만 표출됨.
 
 # FIX-PPT-THEME: 다크 방송그래픽 팔레트 → 밝은 슬라이드(PPT) 팔레트로 교체.
 # 한국 증권 관행(상승=빨강/하락=파랑)은 그대로 유지하고, 배경만 라이트 테마로 전환.
@@ -183,6 +183,28 @@ def normalize_stock_name(name: str) -> str:
         if alias.replace(" ", "") == no_space:
             return canonical
     return name
+
+
+# ── 채널 성격 분류 (경제방송 vs 유튜브) ──────────────────────────────────────
+# 공중파/종편/케이블 증권방송 채널명을 등록해 두면 "경제방송"으로 표시되고,
+# 목록에 없는 채널명은 모두 "유튜브"로 간주합니다(개인/기업 유튜브 채널 다수 대응).
+ECONOMIC_BROADCAST_CHANNELS = {
+    "한국경제TV", "한국경제tv", "매일경제TV", "매경TV", "MBN", "SBS Biz", "SBS비즈",
+    "YTN", "YTN사이언스", "연합뉴스TV", "이데일리TV", "이데일리", "머니투데이방송", "MTN",
+    "서울경제TV", "아시아경제TV", "KBS", "KBS뉴스", "SBS", "MBC", "채널A",
+    "TV조선", "JTBC", "블룸버그", "Bloomberg", "CNBC",
+}
+
+
+def classify_channel_type(channel: str) -> str:
+    """채널명을 '경제방송' 또는 '유튜브'로 분류합니다."""
+    name = (channel or "").strip()
+    if not name:
+        return ""
+    for known in ECONOMIC_BROADCAST_CHANNELS:
+        if known.lower() in name.lower() or name.lower() in known.lower():
+            return "경제방송"
+    return "유튜브"
 
 
 NEWS_IMAGE_FALLBACKS = {

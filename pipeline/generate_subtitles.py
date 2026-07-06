@@ -44,11 +44,13 @@ ScaledBorderAndShadow: yes
 YCbCr Matrix: TV.709
 Title: KBS 머니올라 자막
 
+; MarginV=40 는 슬라이드 하단 190px 고정 자막 영역(pipeline/assets/config.py의
+; SUBTITLE_ZONE_TOP)과 맞춰 카드/차트 등 콘텐츠와 겹치지 않도록 배치한 값입니다.
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,NotoSansCJK,42,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,160,1
-Style: Highlight,NotoSansCJK,42,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,24,1
-Style: Warning,NotoSansCJK,36,&H004040FF,&H000000FF,&H00000000,&HAA000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,24,1
+Style: Default,NotoSansCJK,42,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,40,1
+Style: Highlight,NotoSansCJK,42,&H0000FFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,40,1
+Style: Warning,NotoSansCJK,36,&H004040FF,&H000000FF,&H00000000,&HAA000000,-1,0,0,0,100,100,0,0,1,2,1,2,20,20,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -323,6 +325,11 @@ def _make_dialogue_events(subtitle_text: str,
                            style: str = "Default") -> list:
     """
     자막 텍스트를 duration에 맞게 분할하여 ASS Dialogue 이벤트 리스트를 반환합니다.
+
+    각 청크의 표출 시간은 균등 분할이 아니라 글자 수에 비례해 배분합니다.
+    나레이션은 실제로 각 문장 길이에 비례한 시간이 걸리므로, 균등 분할 시
+    짧은 문장은 자막이 필요 이상으로 오래 남고 긴 문장은 나레이션이 끝나기
+    전에 자막이 먼저 사라지는 동기화 오차가 발생합니다.
     """
     if not subtitle_text or duration <= 0:
         return []
@@ -331,22 +338,25 @@ def _make_dialogue_events(subtitle_text: str,
     if not chunks:
         return []
 
+    total_len = sum(len(c) for c in chunks) or 1
     events = []
-    chunk_duration = duration / len(chunks)
+    t_cursor = start_time
 
     for i, chunk in enumerate(chunks):
-        t_start  = start_time + i * chunk_duration
+        chunk_duration = duration * (len(chunk) / total_len)
+        t_start  = t_cursor
         t_end    = t_start + chunk_duration - 0.08
         ass_text = _format_ass_text(chunk)
         events.append(
             f"Dialogue: 0,{_ts(t_start)},{_ts(t_end)},{style},,0,0,0,,{ass_text}"
         )
+        t_cursor += chunk_duration
 
     return events
 
 
 def generate_ass(sections: list, lang: str, out_path: str,
-                 frame_order: list = None):
+                 frame_order: list = None, time_scale: float = 1.0):
     """
     ASS 자막 파일을 생성합니다.
 
@@ -355,6 +365,9 @@ def generate_ass(sections: list, lang: str, out_path: str,
         lang:        언어 코드 (KO)
         out_path:    출력 ASS 파일 경로
         frame_order: asset_map.json의 frames 순서 (프레임 파일 절대/상대 경로 목록)
+        time_scale:  최종 영상이 배속 조정(atempo/setpts)된 경우의 보정 계수.
+                     예) 영상을 1.05배속으로 줄였다면 1/1.05를 전달해 자막
+                     타임라인도 동일 비율로 줄여야 나레이션과 어긋나지 않습니다.
     """
     subtitle_map = _build_subtitle_map(sections, lang)
     audio_base   = os.path.join("output", lang, "audio")
@@ -362,6 +375,8 @@ def generate_ass(sections: list, lang: str, out_path: str,
     print(f"\n  [subtitle] 자막 맵 키 수: {len(subtitle_map)}")
     for k in list(subtitle_map.keys())[:5]:
         print(f"    · {k}: {subtitle_map[k][:30]}...")
+    if time_scale != 1.0:
+        print(f"  [subtitle] 배속 보정 적용: time_scale={time_scale:.4f}")
 
     events       = []
     current_time = 0.0
@@ -371,7 +386,7 @@ def generate_ass(sections: list, lang: str, out_path: str,
         print("  [subtitle] ⚠️ frame_order 없음 — subtitle_map 순서로 처리")
         for audio_id, subtitle_text in subtitle_map.items():
             mp3_path = os.path.join(audio_base, f"{audio_id}.mp3")
-            duration = _get_audio_duration(mp3_path)
+            duration = _get_audio_duration(mp3_path) * time_scale
             style    = "Warning" if "closing" in audio_id else "Default"
             slide_events = _make_dialogue_events(subtitle_text, current_time, duration, style)
             events.extend(slide_events)
@@ -382,7 +397,7 @@ def generate_ass(sections: list, lang: str, out_path: str,
             stem     = os.path.splitext(os.path.basename(frame_path))[0]
             audio_id = _frame_stem_to_audio_id(stem, sections)
             mp3_path = os.path.join(audio_base, f"{audio_id}.mp3")
-            duration = _get_audio_duration(mp3_path)
+            duration = _get_audio_duration(mp3_path) * time_scale
 
             subtitle_text = subtitle_map.get(audio_id, "")
 

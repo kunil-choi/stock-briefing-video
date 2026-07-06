@@ -186,21 +186,24 @@ def concat_videos(video_list: list, out_path: str) -> bool:
 # ── 영상 길이 조정 (15분에 맞추기) ───────────────────────────────────────
 
 def adjust_to_target_duration(input_path: str, output_path: str,
-                               current_duration: float) -> bool:
+                               current_duration: float) -> float:
     """
     영상 길이를 목표 시간(15분)에 맞게 조정합니다.
     - 너무 짧으면 (< 14분30초): 마지막 프레임 반복으로 늘림
     - 너무 길면 (> 15분30초): 속도 미세 조정으로 줄임
     - 범위 내이면: 그대로 유지
+
+    반환값: 적용된 배속(speed factor). 1.0이면 배속 조정 없음(패딩만 적용됐거나
+    조정이 필요 없었던 경우). 자막 타임라인을 이 값으로 나눠 보정해야 합니다.
     """
     if TARGET_MIN <= current_duration <= TARGET_MAX:
         import shutil
         shutil.copy2(input_path, output_path)
         print(f"  ✅ 영상 길이 정상 ({current_duration:.0f}초 = {int(current_duration//60)}분{int(current_duration%60)}초)")
-        return True
+        return 1.0
 
     if current_duration < TARGET_MIN:
-        # 마지막 프레임 반복으로 패딩
+        # 마지막 프레임 반복으로 패딩 (배속 변화 없음 → 자막 타임라인 그대로 유효)
         pad_seconds = TARGET_IDEAL - current_duration
         print(f"  ⏱ 영상이 짧음 ({current_duration:.0f}초) → {pad_seconds:.0f}초 패딩 추가")
         cmd = [
@@ -212,6 +215,7 @@ def adjust_to_target_duration(input_path: str, output_path: str,
             "-c:a", "aac", "-b:a", "192k",
             output_path
         ]
+        speed = 1.0
     else:
         # 속도 조정으로 줄이기 (최대 10% 빠르게)
         speed = current_duration / TARGET_IDEAL
@@ -233,8 +237,8 @@ def adjust_to_target_duration(input_path: str, output_path: str,
         print(f"  ❌ 길이 조정 실패: {result.stderr[-400:]}")
         import shutil
         shutil.copy2(input_path, output_path)
-        return False
-    return True
+        return 1.0
+    return speed
 
 
 # ── ASS 자막 burn-in ──────────────────────────────────────────────────────
@@ -297,7 +301,8 @@ def mix_bgm(video_path: str, bgm_path: str, out_path: str) -> bool:
 
 # ── ASS 자막 자동 생성 ────────────────────────────────────────────────────
 
-def _auto_generate_subtitles(lang: str, root: str, sections: list, frames: list) -> str:
+def _auto_generate_subtitles(lang: str, root: str, sections: list, frames: list,
+                              time_scale: float = 1.0) -> str:
     sub_dir  = os.path.join(root, "output", lang, "subtitles")
     ass_path = os.path.join(sub_dir, "subtitle.ass")
 
@@ -309,7 +314,7 @@ def _auto_generate_subtitles(lang: str, root: str, sections: list, frames: list)
     try:
         sys.path.insert(0, os.path.join(root, "pipeline"))
         from generate_subtitles import generate_ass
-        generate_ass(sections, lang, ass_path, frames)
+        generate_ass(sections, lang, ass_path, frames, time_scale=time_scale)
         return ass_path
     except Exception as e:
         print(f"  [subtitle] 자막 생성 실패: {e}")
@@ -398,7 +403,7 @@ def run(lang: str = "KO"):
     print(f"\n⏱ 영상 길이 조정 중...\n")
     merged_duration = get_audio_duration(merged_path)
     adjusted_path = os.path.join(video_dir, "adjusted.mp4")
-    adjust_to_target_duration(merged_path, adjusted_path, merged_duration)
+    speed_factor = adjust_to_target_duration(merged_path, adjusted_path, merged_duration)
     if os.path.isfile(adjusted_path):
         try: os.remove(merged_path)
         except: pass
@@ -408,7 +413,9 @@ def run(lang: str = "KO"):
 
     # ── ASS 자막 자동 생성 및 burn-in ──────────────────────────────────
     print(f"\n📝 자막 처리 중...\n")
-    ass_path = _auto_generate_subtitles(lang, root, sections, frames)
+    # 영상이 배속 조정됐다면 자막 타임라인도 동일 비율로 압축해야 나레이션과 어긋나지 않음
+    subtitle_time_scale = 1.0 / speed_factor if speed_factor else 1.0
+    ass_path = _auto_generate_subtitles(lang, root, sections, frames, subtitle_time_scale)
     subtitled_path = os.path.join(video_dir, "with_subtitles.mp4")
 
     if ass_path and os.path.isfile(ass_path):
