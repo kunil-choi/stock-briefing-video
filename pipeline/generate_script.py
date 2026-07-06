@@ -364,100 +364,26 @@ def build_stock_quotes(mentions: list, briefing_date_iso: str) -> dict:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 스크립트 생성
+#
+# ★ 설계 노트 (다중 호출 아키텍처): gpt-4o의 출력 토큰 상한은 16,384개로 고정돼
+# 있습니다. 15분 분량(시장요약+업종분석+AI전략+대형주도주/상위종목 5개(종목당 최대
+# 9개 발언 인용 포함)+집계 섹션)을 narration+subtitle 이중 표기로 모두 채우려면
+# 실측상 25,000~55,000 토큰이 필요해, 한 번의 API 호출로는 절대 다 채울 수
+# 없습니다. 프롬프트 글자 수 목표를 아무리 올려도 이 하드 리밋 때문에 실제로는
+# 전혀 개선되지 않았던 것이 바로 이 문제입니다.
+# 그래서 하나의 거대한 호출 대신, 섹션별로 여러 번의 작은 호출로 나눠 생성한 뒤
+# 병합합니다. 각 호출은 개별적으로 16,384 토큰 상한에 여유 있게 들어갑니다.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_script(
-    briefing_text: str,
-    market_data: dict = None,
-    brokerage_reports: dict = None,
-    stock_quotes: dict = None,
-) -> dict:
-    system_prompt = f"""
-너는 KBS 머니올라 주식 방송 스크립트 작성 전문가입니다.
-증권 브리핑 데이터를 바탕으로 **15분짜리** 방송 스크립트를 JSON 형식으로 작성하세요.
-작성일: {TODAY}
-
-## ★ 15분 영상 분량 설계 (반드시 준수)
-한국어 TTS 낭독 속도 기준(1.3배속 적용 시): 1분 = 약 310~320자
-전체 목표: 오프닝+클로징 고정 텍스트 포함 총 5,800자 이상 — 반드시 이 이상을 채워서
-실제 방송 분량이 15분에 최대한 가깝게 나오도록 하세요. 분량이 부족하면 영상 후반부가
-음악만 나오는 빈 시간으로 채워지므로, 목표치 미달은 반드시 피해야 합니다.
-
-### 섹션별 narration 목표 글자 수 (공백 포함):
-- market_summary : 480~600자 (목표 1분 30초~2분, 이 범위 안에서는 자유롭게 서술)
-  → KOSPI·KOSDAQ·해외지수·환율 수치와 등락 방향, 핵심 원인과 배경을 구체적으로 설명.
-    600자를 크게 넘기지 않도록 하되, 이전처럼 900자 이상으로 장황해지는 것만 피하세요.
-
-- sectors : 900자 이상 (약 3분)
-  → hot_sectors 각 섹터를 3~5문장으로 충분히 설명.
-  → market_summary에서 이미 언급한 지수 수치·환율·전반적 시황 코멘트는 반복하지 말 것.
-    업종별 개별 동인(수급, 실적, 정책, 해외 이슈 등)과 관련 종목·테마 흐름 등
-    market_summary에서 다루지 않은 새로운 내용 위주로 서술.
-
-- 각 stock 섹션 narration : 900자 이상 (요구사항: 종목별 설명을 더 자세히)
-  → summary, catalyst, risk, mention 모두 포함. 종목별로 구체적 수치와 전망까지 충분히 서술.
-  → narration_mention(전문가 발언 소개) 분량이 narration_summary보다 짧아지지 않도록 하세요.
-    이 코너의 핵심은 "누가 무엇을 말했는지"이므로 mention 분량을 가장 충실하게 작성합니다.
-    발언 각각을 2~3문장으로 풀어 쓰고, 발언 원문의 뉘앙스와 근거·수치까지 살리세요.
-
-- stock_추가관심종목 : 종목 수에 비례 (종목당 최소 100자, 전체 400자 이상)
-  → "다음은 오늘의 추가 관심 종목입니다."로 시작.
-    stocks 배열에서 개별 섹션으로 다루지 않은 나머지 종목을 전부 소개.
-    각 종목: 등락 방향 + 핵심 이유 + 전망까지 2문장 이상으로 서술 (한 문장으로 끝내지 말 것).
-  → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고). 전체 시간이 부족하면 items 중 관심도가
-    낮은 하위 종목들만 따로 "추가 관심 종목"으로 분리해 다뤄도 좋습니다.
-
-- stock_오늘의픽 : hidden_picks 데이터가 있을 때만 생성 (전체 300자 이상)
-  → "오늘의 숨은 픽을 소개합니다."로 시작.
-    hidden_picks 종목 각각을 2~3문장으로 소개.
-    hidden_picks가 비어 있으면 이 섹션 자체를 JSON에 포함하지 말 것.
-  → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고).
-
-- stock_증권사리포트 : brokerage_reports 데이터가 있을 때만 생성 (전체 300자 이상)
-  → "증권사 리포트에서 주목한 종목을 살펴보겠습니다."로 시작.
-    동시언급 종목은 "여러 증권사에서 동시에 주목한 [종목명]입니다."로 소개.
-    커버리지 개시 종목은 "[증권사]가 [종목명]에 대한 커버리지를 새로 시작했습니다."로 소개.
-    brokerage_reports가 없거나 비어 있으면 이 섹션 자체를 JSON에 포함하지 말 것.
-  → items 배열 필수(아래 "집계형 섹션 items 규칙" 참고).
-
-### 집계형 섹션 items 규칙 (stock_추가관심종목 / stock_오늘의픽 / stock_증권사리포트 공통)
-- narration/subtitle 전체 문단과 별도로, 종목 1개당 items 배열 원소 1개를 반드시 만드세요.
-  문장 단위가 아니라 종목 단위로 나눠야 화면에 종목별로 정확히 번호가 매겨집니다.
-  예: [{{"name": "종목명", "text": "이 종목 한 개에 대한 2~3문장 설명"}}, ...]
-- items의 개수와 순서는 narration에서 종목을 언급한 개수·순서와 반드시 일치해야 합니다.
-- 문장마다 번호를 매기지 말고, 반드시 종목(items 원소)마다 번호가 매겨지도록 하세요.
-
-- ai_strategy : 700자 이상 (약 2분 20초)
-  → 오늘 시장 흐름을 종합한 투자 전략을 구체적으로 서술.
-
-### 분량 검증 규칙:
-- 각 섹션 narration을 작성한 뒤 글자 수를 스스로 확인하세요.
-- 모든 섹션이 목표치에 미달하면 반드시 추가 설명(배경·수치·전망·발언 인용 확장)을 붙여
-  목표치를 채우세요. 목표 미달은 영상 후반부가 무음/음악만 나오는 결과로 이어지므로
-  절대 피해야 합니다.
-- market_summary만 600자를 넘기지 않도록 관리하고, 나머지 섹션은 목표치 이상으로
-  풍부하게 작성하는 것을 권장합니다.
-- "간략히", "짧게", "요약하면" 같은 표현으로 내용을 줄이지 마세요.
-
-## ★ 종목 선별 기준
-- market_leaders (2개): 반드시 모두 포함, summary+chart+mention 슬라이드 구성
-- stocks: weighted_score 상위 3개는 개별 섹션으로 충실히 설명
-- stocks: 나머지 종목도 반드시 전부 포함. "추가 관심 종목" 섹션(id: stock_추가관심종목)을
-  하나 만들어 종목당 2~3문장으로 소개. 생략하지 말 것.
-- hidden_picks: 데이터가 있으면 반드시 포함. "오늘의 픽" 섹션(id: stock_오늘의픽)으로 구성.
-  데이터가 비어 있으면 해당 섹션 자체를 생략.
-- brokerage_reports(JSON, 아래 별도 제공)가 있으면 세 카테고리를 모두 빠짐없이 반영해
-  "증권사 리포트" 섹션(id: stock_증권사리포트)을 구성하세요.
-  · simultaneous(동시언급): "여러 증권사에서 동시에 주목한 [종목명]입니다."로 소개
-  · new_coverage(신규 커버리지 개시): "[증권사]가 [종목명]에 대한 커버리지를 새로 시작했습니다."로 소개
-  · single_significant(유의미한 단독 언급): "[증권사]는 [종목명]에 대해 [의견/목표주가 요지]를 제시했습니다."로 소개
-  각 항목은 ai_summary 필드가 있으면 그 내용을 근거로 종목당 1~2문장으로 간결히 소개하고,
-  세 카테고리 배열이 모두 비어 있으면 이 섹션 자체를 생략하세요.
-
-## ★ 종목 목록 매핑
-{STOCK_NAME_LIST}
-
+_NARRATION_SUBTITLE_RULES = """
 ## ★ narration vs subtitle 핵심 차이 (반드시 준수)
+
+### narration/subtitle 문장 수 일치 (자막 동기화를 위해 반드시 준수)
+- narration과 subtitle(및 narration_summary/subtitle_summary 등 모든 쌍)은 반드시 문장
+  수가 동일해야 하고, 같은 순서로 같은 내용을 담아야 합니다. 표기(숫자/영문)만 다를 뿐
+  내용과 문장 경계는 1:1로 대응해야 자막이 나레이션과 정확히 동기화됩니다.
+- 문장 수를 맞추기 위해 임의로 문장을 합치거나 쪼개지 말고, 애초에 같은 문장 구조로
+  narration과 subtitle을 나란히 작성하세요.
 
 ### [narration — TTS 낭독용]
 - 모든 숫자를 한글로 풀어서 읽습니다:
@@ -489,7 +415,9 @@ def generate_script(
 - 뜻이 생소한 용어는 **(뜻)** 을 괄호 안에 병기:
   · HBM(고대역폭 메모리) | PER(주가수익비율) | DSR(총부채원리금상환비율)
   · MOU(업무협약) | ADR(미국주식예탁증서) | PCE(개인소비지출) | ESS(에너지저장장치) | OTT(온라인 동영상 서비스)
+"""
 
+_MENTION_RULES = """
 ## ★ mention 항목 규칙 — 이 방송의 핵심 목적
 이 방송은 유튜브·증권방송에 출연한 전문가들이 각 종목에 대해 실제로 무엇을 말했는지
 종합 정리해 전달하는 것이 가장 중요한 목적입니다. 종목 설명 자체보다 "누가, 어떤
@@ -522,152 +450,335 @@ def generate_script(
   다시 적지 말고 발언 내용 자체만 적습니다.
 - 30자 헤드라인으로 압축하지 말고, 실제 발언의 핵심 문장을 인용부호(" ")로 감싸
   50~90자 내외로 구체적으로 제시하세요 (stock_quotes의 quote 필드를 근거로 함).
+- 인용부호로 감싼 문장 뒤에는 반드시 마침표를 찍어 문장이 명확히 끝나도록 하세요
+  (자막 동기화 로직이 마침표 등 문장부호를 기준으로 문장을 구분합니다).
 - 나쁜 예(과도한 축약): 코스피 6700 돌파 주도, 단기 과열 리스크 병존
 - 좋은 예(발언 인용): "코스피 6700 돌파를 삼성전자가 주도했지만, 단기적으로는 과열
-  신호도 함께 나타나고 있다고 봅니다"
+  신호도 함께 나타나고 있다고 봅니다."
 
-### 코너 오프닝 멘트 (반드시 포함)
-- opening: "__OPENING__" 플레이스홀더 사용
-- market_summary: "먼저 오늘의 주식시장 전체 흐름을 요약해 드리겠습니다."
-- sectors: "오늘 시장에서 주목받는 핵심 업종들을 살펴보겠습니다."
-- 첫 번째 stock_: "지금부터 오늘의 관심 종목 분석입니다."
-- 이후 stock_: "다음은 [종목명] 분석입니다."
-- chart 슬라이드: "최근 이주간 주까 차트를 보면,"
-- mention 슬라이드(첫 번째): "각 채널에서 언급한 내용을 보겠습니다."
-- ai_strategy: "에이아이가 제안하는 오늘의 투자 전략입니다."
-- closing: "__CLOSING__" 플레이스홀더 사용
-
-## mention 슬라이드 분할 규칙
-- 언급 1~3개: 단일 슬라이드
-- 언급 4~6개: 2슬라이드 (_0/_1)
-- 언급 7~9개: 3슬라이드 (_0/_1/_2)
-- 각 슬라이드 최대 3개 언급
-
-## 최종 JSON 구조
-{{
-  "title": "{TODAY} KBS 머니올라 주식 브리핑",
-  "date": "{TODAY}",
-  "sections": [
-    {{
-      "id": "opening",
-      "label": "오프닝",
-      "narration": "__OPENING__",
-      "subtitle": "__OPENING_SUBTITLE__",
-      "keywords": ["키워드1", "키워드2", "키워드3"]
-    }},
-    {{
-      "id": "market_summary",
-      "label": "시장 요약",
-      "corner_summary": "오늘 시장의 핵심 한줄 요약",
-      "narration": "먼저 오늘의 주식시장 전체 흐름을 요약해 드리겠습니다. ...",
-      "subtitle": "먼저 오늘의 주식시장 전체 흐름을 요약해 드리겠습니다. ...",
-      "kospi_value": "9,052",
-      "kospi_change": "-0.13%",
-      "kospi_change_positive": false,
-      "kosdaq_value": "966",
-      "kosdaq_change": "-3.43%",
-      "kosdaq_change_positive": false,
-      "nasdaq_value": "19,864",
-      "nasdaq_change": "-0.24%",
-      "nasdaq_positive": false,
-      "sp500_value": "5,528",
-      "sp500_change": "-0.05%",
-      "sp500_positive": false,
-      "usdkrw_value": "1,380",
-      "usdkrw_change": "-0.74%",
-      "usdkrw_positive": false,
-      "points": ["포인트1", "포인트2", "포인트3"]
-    }},
-    {{
-      "id": "sectors",
-      "label": "업종 분석",
-      "corner_summary": "오늘의 핵심 섹터 한줄 요약",
-      "narration": "오늘 시장에서 주목받는 핵심 업종들을 살펴보겠습니다. ...",
-      "subtitle": "오늘 시장에서 주목받는 핵심 업종들을 살펴보겠습니다. ...",
-      "sector_list": [{{"name": "섹터명", "desc": "설명", "momentum": "상승/보합/하락"}}]
-    }},
-    {{
-      "id": "stock_삼성전자",
-      "label": "종목 분석 - 삼성전자",
-      "corner_summary": "삼성전자 한줄 요약",
-      "narration_summary": "지금부터 관심 종목 분석입니다. ...",
-      "subtitle_summary": "지금부터 관심 종목 분석입니다. ...",
-      "narration_chart": "최근 이주간 주까 차트를 보면, ...",
-      "subtitle_chart": "최근 2주간 주가 차트를 보면, ...",
-      "narration_mention": "각 채널에서 언급한 내용을 보겠습니다. ...",
-      "subtitle_mention": "...",
-      "price": "000,000",
-      "change": "+0.00%",
-      "change_positive": true,
-      "summary": "한줄 요약",
-      "catalysts": ["촉매1", "촉매2"],
-      "risks": ["리스크1"],
-      "mentions": [
-        {{
-          "speaker": "발화자명",
-          "channel": "채널명",
-          "quote_narration": "TTS 낭독용 구어체",
-          "quote_subtitle": "문어체 요약 30자 이내"
-        }}
-      ]
-    }},
-    {{
-      "id": "stock_추가관심종목",
-      "label": "추가 관심 종목",
-      "corner_summary": "추가 관심 종목 한줄 요약",
-      "narration": "다음은 오늘의 추가 관심 종목입니다. ...",
-      "subtitle": "다음은 오늘의 추가 관심 종목입니다. ...",
-      "items": [
-        {{"name": "종목명", "text": "이 종목 1개에 대한 2~3문장 설명(등락 방향+이유+전망)"}}
-      ]
-    }},
-    {{
-      "id": "ai_strategy",
-      "label": "AI 투자 전략",
-      "corner_summary": "오늘의 AI 전략 핵심 요약",
-      "narration": "에이아이가 제안하는 오늘의 투자 전략입니다. ...",
-      "subtitle": "AI가 제안하는 오늘의 투자 전략입니다. ...",
-      "bullet_points": ["전략1", "전략2"]
-    }},
-    {{
-      "id": "closing",
-      "label": "클로징",
-      "narration": "__CLOSING__",
-      "subtitle": "__CLOSING_SUBTITLE__",
-      "disclaimer": "⚠️ 투자 유의사항 | 본 브리핑은 AI 분석 참고자료이며 투자 권유가 아닙니다. 주식 투자는 원금 손실 위험이 있습니다. 투자 책임은 전적으로 본인에게 있습니다."
-    }}
-  ]
-}}
+### narration_mention_N / subtitle_mention_N 작성 규칙
+- 언급 1~3개: narration_mention / subtitle_mention (접미사 없음) 필드 하나만 작성.
+- 언급 4~6개: narration_mention_0/1, subtitle_mention_0/1 (페이지당 최대 3개 발언).
+- 언급 7~9개: narration_mention_0/1/2, subtitle_mention_0/1/2.
+- 각 페이지의 narration_mention_N은 그 페이지에 속한 mentions의 quote_narration을
+  화자·채널 소개와 함께 순서대로 이어붙인 완결된 문단으로 작성하고, subtitle_mention_N도
+  같은 순서·같은 문장 수로 대응하는 quote_subtitle들을 이어붙이세요(문장 수 일치 필수).
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": (
-                "15분 분량의 KBS 머니올라 방송 스크립트를 작성해주세요. 각 섹션은 최소 목표 글자 수를 반드시 초과해야 하며, "
-                "분량이 부족하면 관련 배경 설명과 시장 맥락을 추가로 서술하세요.\n"
-                "유튜브 출연진 멘트를 반드시 포함시켜 주세요. mentions는 아래 stock_quotes JSON에 있는 "
-                "실제 발언만 사용하고, 없는 종목은 mentions를 생략하세요.\n\n"
-                + (f"## 실시간 시장 지표 (market_summary JSON 필드에 그대로 사용하세요)\n"
-                   f"{json.dumps(market_data, ensure_ascii=False, indent=2)}\n\n"
-                   if market_data else "")
-                + (f"## 증권사 리포트 데이터 (JSON, stock_증권사리포트 섹션에 반드시 반영)\n"
-                   f"{json.dumps(brokerage_reports, ensure_ascii=False, indent=2)}\n\n"
-                   if brokerage_reports else "")
-                + (f"## 종목별 실제 발언 인용 (JSON, mentions 필드는 이 데이터만 근거로 작성)\n"
-                   f"{json.dumps(stock_quotes, ensure_ascii=False, indent=2)}\n\n"
-                   if stock_quotes else "")
-                + briefing_text
-            )}
-        ],
-        response_format={"type": "json_object"},
-        temperature=0.7,
-        max_tokens=16000,
+
+def _call_json(system_prompt: str, user_content: str, max_tokens: int,
+               temperature: float = 0.7, retries: int = 1) -> dict:
+    """OpenAI Chat Completions를 호출해 JSON 객체를 반환합니다. 실패 시 1회 재시도."""
+    last_err = None
+    for attempt in range(retries + 1):
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format={"type": "json_object"},
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return json.loads(response.choices[0].message.content)
+        except Exception as e:
+            last_err = e
+            print(f"  ⚠️ API 호출 실패(시도 {attempt + 1}/{retries + 1}): {e}")
+    print(f"  ❌ API 호출 최종 실패: {last_err}")
+    return {}
+
+
+def _generate_core(briefing_text: str, market_data: dict) -> dict:
+    """시장요약/업종분석/AI전략 코너와 종목 분류 목록을 생성하는 1차 호출.
+    종목별 상세 섹션(mentions 포함)은 여기서 만들지 않아 토큰 상한에 여유가 큽니다."""
+    system_prompt = f"""
+너는 KBS 머니올라 주식 방송 스크립트 작성 전문가입니다. 오늘 방송의 '시장 요약',
+'업종 분석', 'AI 투자 전략' 코너와, 이후 종목별 섹션을 만들기 위한 종목 분류 목록을
+JSON으로 작성하세요. 이 호출에서는 개별 종목의 상세 설명은 작성하지 마세요.
+작성일: {TODAY}
+
+{_NARRATION_SUBTITLE_RULES}
+
+## ★ 섹션별 요구사항 (narration 글자 수, 공백 포함)
+- market_summary: 480~600자 (목표 1분 30초~2분, 600자를 크게 넘기지 말 것).
+  KOSPI·KOSDAQ·해외지수·환율의 등락과 핵심 원인 1~2가지만 짚고, 업종·개별 종목 상세
+  설명은 하지 마세요(다음 코너에서 다룸). "먼저 오늘의 주식시장 전체 흐름을 요약해
+  드리겠습니다."로 시작. points는 3~4개.
+- sectors: 900자 이상. hot_sectors 각 섹터를 3~5문장으로 충분히 설명하고, market_summary와
+  중복되는 지수·환율 코멘트는 반복하지 마세요. "오늘 시장에서 주목받는 핵심 업종들을
+  살펴보겠습니다."로 시작. sector_list는 최대 6개.
+- ai_strategy: 700자 이상. 오늘 시장 흐름을 종합한 투자 전략을 구체적으로 서술.
+  "에이아이가 제안하는 오늘의 투자 전략입니다."로 시작. bullet_points는 4~6개.
+- 위 세 섹션 모두 목표 글자 수 미달을 절대 허용하지 마세요. 미달 시 배경 설명, 수치,
+  전망을 추가해서 채우세요. "간략히", "요약하면" 같은 축약 표현은 쓰지 마세요.
+
+## ★ 종목 분류 (브리핑 원문에서 추출 — 본문 작성 없이 목록만)
+- market_leaders: 브리핑에서 가장 비중 있게 다뤄진 대형 주도주 정확히 2개.
+- top_stocks: market_leaders를 제외하고 weighted_score(또는 언급 비중)가 높은 상위 3개.
+- remaining_stocks: 브리핑에 등장하는 나머지 관심 종목 전부 (생략 없이 모두 나열).
+- hidden_picks: '오늘의 픽'/'숨은 종목' 성격의 종목 (없으면 빈 배열).
+- 종목명은 아래 목록의 정확한 표기를 사용하세요.
+
+## ★ 종목 목록 매핑
+{STOCK_NAME_LIST}
+
+## 출력 JSON 구조
+{{
+  "keywords": ["키워드1", "키워드2", "키워드3"],
+  "market_summary": {{
+    "corner_summary": "오늘 시장의 핵심 한줄 요약",
+    "narration": "...", "subtitle": "...",
+    "points": ["포인트1", "포인트2", "포인트3"]
+  }},
+  "sectors": {{
+    "corner_summary": "오늘의 핵심 섹터 한줄 요약",
+    "narration": "...", "subtitle": "...",
+    "sector_list": [{{"name": "섹터명", "desc": "설명", "momentum": "상승/보합/하락"}}]
+  }},
+  "ai_strategy": {{
+    "corner_summary": "오늘의 AI 전략 핵심 요약",
+    "narration": "...", "subtitle": "...",
+    "bullet_points": ["전략1", "전략2"]
+  }},
+  "market_leaders": ["종목명", "종목명"],
+  "top_stocks": ["종목명", "종목명", "종목명"],
+  "remaining_stocks": ["종목명"],
+  "hidden_picks": []
+}}
+"""
+    user_content = (
+        (f"## 실시간 시장 지표 (참고만 하고 narration/subtitle 서술에 반영하세요. "
+         f"이 수치 필드를 JSON에 다시 출력할 필요는 없습니다)\n"
+         f"{json.dumps(market_data, ensure_ascii=False, indent=2)}\n\n"
+         if market_data else "")
+        + briefing_text
+    )
+    data = _call_json(system_prompt, user_content, max_tokens=6000, temperature=0.7)
+
+    market_summary = data.get("market_summary") or {}
+    if market_data:
+        market_summary = {**market_summary, **market_data}
+
+    return {
+        "keywords":          (data.get("keywords") or [])[:4],
+        "market_summary":    market_summary,
+        "sectors":           data.get("sectors") or {},
+        "ai_strategy":       data.get("ai_strategy") or {},
+        "market_leaders":    data.get("market_leaders") or [],
+        "top_stocks":        data.get("top_stocks") or [],
+        "remaining_stocks":  data.get("remaining_stocks") or [],
+        "hidden_picks":      data.get("hidden_picks") or [],
+    }
+
+
+def _generate_stock_section(stock_name: str, briefing_text: str,
+                             quotes: list, is_hidden: bool = False) -> dict:
+    """종목 하나에 대한 완전한 섹션(summary+chart+mention+mentions)을 생성하는 호출.
+    market_leaders/top_stocks 종목마다 별도로 호출해, 발언 인용이 많아도(최대 9개)
+    토큰 상한에 안전하게 들어갑니다."""
+    system_prompt = f"""
+너는 KBS 머니올라 주식 방송 스크립트 작성 전문가입니다. 아래 종목 '{stock_name}' 하나에
+대한 종목 분석 섹션만 작성하세요. 다른 종목은 절대 다루지 마세요.
+작성일: {TODAY}
+
+{_NARRATION_SUBTITLE_RULES}
+
+{_MENTION_RULES}
+
+## ★ 분량 요구사항 (요구사항: 종목별 설명을 더 자세히)
+- narration_summary + narration_chart + narration_mention(_N 포함) 합산 900자 이상.
+- narration_mention 계열 분량이 narration_summary보다 짧아지지 않도록 하세요. 이 코너의
+  핵심은 "누가 무엇을 말했는지"이므로 mention 분량을 가장 충실하게 작성합니다.
+- 목표 미달을 절대 허용하지 마세요. "간략히", "요약하면" 표현 금지.
+
+## ★ 코너 멘트
+- narration_summary 시작: "다음은 {stock_name} 분석입니다."
+- narration_chart 시작: "최근 이주간 주까 차트를 보면,"
+- 첫 mention 페이지 시작: "각 채널에서 언급한 내용을 보겠습니다."
+
+## 출력 JSON 구조
+{{
+  "corner_summary": "{stock_name} 한줄 요약",
+  "narration_summary": "...", "subtitle_summary": "...",
+  "narration_chart": "...", "subtitle_chart": "...",
+  "narration_mention": "...(언급 1~3개일 때만)", "subtitle_mention": "...",
+  "narration_mention_0": "...(언급 4개 이상일 때만)", "subtitle_mention_0": "...",
+  "narration_mention_1": "...", "subtitle_mention_1": "...",
+  "narration_mention_2": "...(언급 7개 이상일 때만)", "subtitle_mention_2": "...",
+  "price": "000,000", "change": "+0.00%", "change_positive": true,
+  "summary": "한줄 요약", "catalysts": ["촉매1", "촉매2"], "risks": ["리스크1"],
+  "mentions": [
+    {{"speaker": "발화자명", "channel": "채널명",
+      "quote_narration": "TTS 낭독용 — 발화자·채널 호명 후 인용",
+      "quote_subtitle": "화면 카드용 — 발언 인용, 50~90자"}}
+  ]
+}}
+
+이 종목에 대한 실제 발언 데이터(stock_quotes)가 비어 있으면 mentions는 빈 배열로 두고
+narration_mention 계열 필드도 생략하세요.
+"""
+    user_content = (
+        (f"## 이 종목의 실제 발언 인용 (mentions 필드는 이 데이터만 근거로 작성, 지어내기 금지)\n"
+         f"{json.dumps(quotes, ensure_ascii=False, indent=2)}\n\n"
+         if quotes else "이 종목에 대한 실제 발언 데이터가 없습니다. mentions는 빈 배열로 두세요.\n\n")
+        + f"## 브리핑 원문 (이 중 '{stock_name}' 관련 내용만 참고하세요)\n{briefing_text}"
+    )
+    data = _call_json(system_prompt, user_content, max_tokens=6000, temperature=0.7)
+    if not data:
+        return {}
+    data["id"] = f"{'hidden_' if is_hidden else 'stock_'}{stock_name}"
+    data["label"] = f"{'숨은 ' if is_hidden else ''}종목 분석 - {stock_name}"
+    return data
+
+
+def _generate_aggregate_sections(remaining_stocks: list, hidden_picks: list,
+                                  brokerage_reports: dict, briefing_text: str) -> list:
+    """추가 관심 종목 / 오늘의 픽 / 증권사 리포트 3개 집계 섹션을 생성하는 호출."""
+    if not remaining_stocks and not hidden_picks and not brokerage_reports:
+        return []
+
+    system_prompt = f"""
+너는 KBS 머니올라 주식 방송 스크립트 작성 전문가입니다. 아래 세 집계형 코너를 JSON으로
+작성하세요. 해당 데이터가 없는 코너는 결과 JSON에서 필드 자체를 생략하세요.
+작성일: {TODAY}
+
+{_NARRATION_SUBTITLE_RULES}
+
+## ★ stock_추가관심종목 (remaining_stocks 목록에 있는 종목이 있을 때만 작성)
+- narration/subtitle: "다음은 오늘의 추가 관심 종목입니다."로 시작, 종목 수에 비례해
+  종목당 최소 100자, 전체 400자 이상. 각 종목: 등락 방향+핵심 이유+전망까지 2문장 이상.
+- items: remaining_stocks의 종목을 전부(생략 없이) 다루고, 종목 1개당 items 배열 원소
+  1개. [{{"name": "종목명", "text": "이 종목 1개에 대한 2~3문장 설명"}}, ...]
+  items 순서·개수는 narration에서 언급한 순서·개수와 반드시 일치해야 합니다.
+
+## ★ stock_오늘의픽 (hidden_picks가 있을 때만 작성)
+- narration/subtitle: "오늘의 숨은 픽을 소개합니다."로 시작, hidden_picks 각각을
+  2~3문장으로 소개, 전체 300자 이상.
+- items: hidden_picks 종목 1개당 원소 1개, 위와 동일한 형식.
+
+## ★ stock_증권사리포트 (brokerage_reports 데이터가 있을 때만 작성)
+- narration/subtitle: "증권사 리포트에서 주목한 종목을 살펴보겠습니다."로 시작, 전체
+  300자 이상.
+  · simultaneous(동시언급): "여러 증권사에서 동시에 주목한 [종목명]입니다."로 소개
+  · new_coverage(신규 커버리지 개시): "[증권사]가 [종목명]에 대한 커버리지를 새로
+    시작했습니다."로 소개
+  · single_significant(유의미한 단독 언급): "[증권사]는 [종목명]에 대해 [의견/목표주가
+    요지]를 제시했습니다."로 소개
+- items: 위 세 카테고리에 등장한 종목 1개당 원소 1개, 위와 동일한 형식.
+
+## 문장마다 번호를 매기지 말고, 반드시 종목(items 원소)마다 번호가 매겨지도록 items를
+작성하세요 (화면에 items 배열 순서대로 번호가 표시됩니다).
+
+## 출력 JSON 구조 (해당 데이터 없는 코너는 키 자체를 생략)
+{{
+  "stock_추가관심종목": {{
+    "corner_summary": "추가 관심 종목 한줄 요약",
+    "narration": "...", "subtitle": "...",
+    "items": [{{"name": "종목명", "text": "..."}}]
+  }},
+  "stock_오늘의픽": {{
+    "corner_summary": "오늘의 픽 한줄 요약",
+    "narration": "...", "subtitle": "...",
+    "items": [{{"name": "종목명", "text": "..."}}]
+  }},
+  "stock_증권사리포트": {{
+    "corner_summary": "증권사 리포트 한줄 요약",
+    "narration": "...", "subtitle": "...",
+    "items": [{{"name": "종목명", "text": "..."}}]
+  }}
+}}
+"""
+    user_content = (
+        f"## 추가 관심 종목 목록\n{json.dumps(remaining_stocks, ensure_ascii=False)}\n\n"
+        f"## 오늘의 픽 목록\n{json.dumps(hidden_picks, ensure_ascii=False)}\n\n"
+        + (f"## 증권사 리포트 데이터\n{json.dumps(brokerage_reports, ensure_ascii=False, indent=2)}\n\n"
+           if brokerage_reports else "")
+        + f"## 브리핑 원문\n{briefing_text}"
+    )
+    data = _call_json(system_prompt, user_content, max_tokens=8000, temperature=0.7)
+
+    sections = []
+    for sid, title in (
+        ("stock_추가관심종목", "추가 관심 종목"),
+        ("stock_오늘의픽", "오늘의 픽"),
+        ("stock_증권사리포트", "증권사 리포트"),
+    ):
+        sec = data.get(sid)
+        if sec:
+            sec["id"] = sid
+            sec["label"] = title
+            sections.append(sec)
+    return sections
+
+
+def generate_script(
+    briefing_text: str,
+    market_data: dict = None,
+    brokerage_reports: dict = None,
+    stock_quotes: dict = None,
+) -> dict:
+    stock_quotes = stock_quotes or {}
+
+    print("\n🧩 1/3 — 시장요약/업종분석/AI전략 + 종목 분류 생성 중...")
+    core = _generate_core(briefing_text, market_data)
+    print(f"   대형 주도주: {core['market_leaders']}")
+    print(f"   상위 관심종목: {core['top_stocks']}")
+    print(f"   추가 관심종목: {len(core['remaining_stocks'])}개 / 오늘의 픽: {len(core['hidden_picks'])}개")
+
+    # 개별 섹션으로 다룰 종목 목록 (대형 주도주 + 상위 관심종목, 중복 제거)
+    seen = set()
+    major_stocks = []
+    for name in core["market_leaders"] + core["top_stocks"]:
+        norm = normalize_stock_name(name)
+        if norm and norm not in seen:
+            seen.add(norm)
+            major_stocks.append(norm)
+
+    print(f"\n🧩 2/3 — 종목별 상세 섹션 생성 중... ({len(major_stocks)}개)")
+    stock_sections = []
+    for i, stock_name in enumerate(major_stocks, 1):
+        print(f"   [{i}/{len(major_stocks)}] {stock_name}")
+        sec = _generate_stock_section(stock_name, briefing_text, stock_quotes.get(stock_name, []))
+        if sec:
+            stock_sections.append(sec)
+        else:
+            print(f"   ⚠️ {stock_name} 섹션 생성 실패 — 건너뜁니다")
+
+    # 개별 섹션에서 다룬 종목은 추가 관심 종목 목록에서 제외
+    covered = set(major_stocks)
+    remaining_stocks = [
+        normalize_stock_name(n) for n in core["remaining_stocks"]
+        if normalize_stock_name(n) not in covered
+    ]
+
+    print(f"\n🧩 3/3 — 집계 섹션(추가 관심종목/오늘의픽/증권사리포트) 생성 중...")
+    aggregate_sections = _generate_aggregate_sections(
+        remaining_stocks, core["hidden_picks"], brokerage_reports, briefing_text
     )
 
-    raw  = response.choices[0].message.content
-    data = json.loads(raw)
+    opening_section = {
+        "id": "opening", "label": "오프닝",
+        "narration": "__OPENING__", "subtitle": "__OPENING_SUBTITLE__",
+        "keywords": core["keywords"],
+    }
+    market_summary_section = {"id": "market_summary", "label": "시장 요약", **core["market_summary"]}
+    sectors_section = {"id": "sectors", "label": "업종 분석", **core["sectors"]}
+    ai_strategy_section = {"id": "ai_strategy", "label": "AI 투자 전략", **core["ai_strategy"]}
+    closing_section = {
+        "id": "closing", "label": "클로징",
+        "narration": "__CLOSING__", "subtitle": "__CLOSING_SUBTITLE__",
+        "disclaimer": DISCLAIMER,
+    }
+
+    sections = (
+        [opening_section, market_summary_section, sectors_section]
+        + stock_sections
+        + aggregate_sections
+        + [ai_strategy_section, closing_section]
+    )
+    data = {"title": f"{TODAY} KBS 머니올라 주식 브리핑", "date": TODAY, "sections": sections}
 
     def _replace(obj):
         if isinstance(obj, str):
