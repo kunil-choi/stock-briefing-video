@@ -447,16 +447,20 @@ _MENTION_RULES = """
   "~고 강조했습니다" | "~다고 내다봤습니다" | "~라고 언급했습니다" | "~고 보도했습니다"
   "~다고 전망했습니다" | "~라고 짚었습니다" | "~고 설명했습니다" | "~다고 판단했습니다"
 
-### quote_subtitle (화면 카드 본문 — 발언 인용 자체, 헤드라인 축약 금지)
+### quote_subtitle (화면 카드 본문 — quote 원문에서 그대로 발췌, 절대 재작성 금지)
 - 채널명·화자명은 카드 상단 배지에 별도로 크게 표시되므로 본문에는 채널/화자를
   다시 적지 말고 발언 내용 자체만 적습니다.
-- 30자 헤드라인으로 압축하지 말고, 실제 발언의 핵심 문장을 인용부호(" ")로 감싸
-  50~90자 내외로 구체적으로 제시하세요 (stock_quotes의 quote 필드를 근거로 함).
+- 요약하거나 다른 표현으로 바꿔 쓰지 마세요. stock_quotes의 quote 필드 원문 중,
+  화면(50~90자 내외)에 들어갈 만큼 짧으면서도 가장 핵심적인 내용을 담은 연속된
+  구간을 문구 변경 없이 그대로 잘라 인용부호(" ")로 감싸세요. 잘라낸 부분이라는
+  것을 표시할 필요가 있으면 앞/뒤에 "…"만 붙이고, 문장 자체의 단어·어순은 절대
+  바꾸지 마세요.
 - 인용부호로 감싼 문장 뒤에는 반드시 마침표를 찍어 문장이 명확히 끝나도록 하세요
   (자막 동기화 로직이 마침표 등 문장부호를 기준으로 문장을 구분합니다).
-- 나쁜 예(과도한 축약): 코스피 6700 돌파 주도, 단기 과열 리스크 병존
-- 좋은 예(발언 인용): "코스피 6700 돌파를 삼성전자가 주도했지만, 단기적으로는 과열
-  신호도 함께 나타나고 있다고 봅니다."
+- 나쁜 예(재작성/축약): 코스피 6700 돌파 주도, 단기 과열 리스크 병존
+- 원문이 "코스피 6700 돌파를 삼성전자가 주도했지만 단기적으로는 과열 신호도 함께
+  나타나고 있다고 봅니다"라면 → 좋은 예(원문 그대로 발췌): "코스피 6700 돌파를
+  삼성전자가 주도했지만 단기적으로는 과열 신호도 함께 나타나고 있다고 봅니다."
 
 ### narration_mention_N / subtitle_mention_N 작성 규칙
 - 언급 1~3개: narration_mention / subtitle_mention (접미사 없음) 필드 하나만 작성.
@@ -577,10 +581,57 @@ JSON으로 작성하세요. 이 호출에서는 개별 종목의 상세 설명�
     }
 
 
+_SENTENCE_END_RE = re.compile(r"[.!?」』]")
+
+
+def _normalize_for_match(s: str) -> str:
+    return re.sub(r"\s+", "", s or "")
+
+
+def _extract_verbatim_excerpt(quote: str, target_len: int = 80) -> str:
+    """quote 원문에서 화면 카드 크기(약 50~90자)에 맞춰, 문구를 바꾸지 않고 그대로
+    잘라냅니다. 가능하면 문장부호 경계에서 자르고, 없으면 단어 경계에서 자른 뒤
+    말줄임표를 붙입니다."""
+    quote = (quote or "").strip()
+    if len(quote) <= target_len:
+        return quote
+    window = quote[:target_len + 20]
+    cut_positions = [m.end() for m in _SENTENCE_END_RE.finditer(window) if m.end() >= target_len * 0.5]
+    if cut_positions:
+        return quote[:cut_positions[-1]].strip()
+    truncated = quote[:target_len]
+    last_space = truncated.rfind(" ")
+    if last_space > target_len * 0.5:
+        truncated = truncated[:last_space]
+    return truncated.strip() + "…"
+
+
+def _ensure_verbatim_subtitle(candidate: str, quote: str) -> str:
+    """quote_subtitle이 실제로 quote 원문의 발췌인지 검증합니다. LLM이 요약·재작성한
+    경우(quote에 없는 표현이 섞인 경우) quote에서 직접 발췌한 문구로 교체해, 화면
+    카드에는 항상 원문 그대로의 일부만 나타나도록 보장합니다."""
+    quote = (quote or "").strip()
+    if not quote:
+        return candidate or ""
+    core = (candidate or "").strip().strip('"“”').strip()
+    if core.endswith("…"):
+        core = core[:-1].strip()
+    if core and _normalize_for_match(core) in _normalize_for_match(quote):
+        text = core
+    else:
+        text = _extract_verbatim_excerpt(quote)
+    if not text.endswith((".", "!", "?", "…")):
+        text += "."
+    return f'"{text}"'
+
+
 def _inject_verbatim_quotes(mentions: list, quotes: list) -> list:
-    """LLM이 재작성한 quote_narration은 원문을 요약/변형할 위험이 있으므로, 실제 발언
-    원문(quotes)을 speaker/channel로 매칭해 mention마다 "quote" 필드에 그대로 주입합니다
-    (generate_voice.py가 이 필드를 그대로 낭독합니다). 매칭 실패 시 순서로 대응시킵니다."""
+    """LLM이 재작성한 quote_narration/quote_subtitle은 원문을 요약·변형할 위험이
+    있으므로, 실제 발언 원문(quotes)을 speaker/channel로 매칭해 mention마다 "quote"
+    필드에 그대로 주입합니다(generate_voice.py가 이 필드를 그대로 낭독합니다).
+    quote_subtitle도 원문에서 그대로 발췌한 문구인지 검증해, 아니면 원문 발췌로
+    교체합니다(화면 카드용 — 요약이 아니라 화면 크기에 맞는 원문 일부). 매칭 실패
+    시 순서로 대응시킵니다."""
     def _key(speaker, channel):
         return (re.sub(r"\s+", "", speaker or ""), re.sub(r"\s+", "", channel or ""))
 
@@ -598,6 +649,7 @@ def _inject_verbatim_quotes(mentions: list, quotes: list) -> list:
                 m["speaker"] = match["speaker"]
             if match in remaining:
                 remaining.remove(match)
+        m["quote_subtitle"] = _ensure_verbatim_subtitle(m.get("quote_subtitle", ""), m.get("quote", ""))
     return mentions
 
 
