@@ -104,12 +104,6 @@ def _frame_stem_to_audio_id(stem: str, sections: list) -> str:
         sid = _find_stock_section_id(stock_name, sections)
         return f"{sid}_mention_00"
 
-    m = re.match(r'^\d{2}_(.+)_2_chart$', stem)
-    if m:
-        stock_name = m.group(1)
-        sid = _find_stock_section_id(stock_name, sections)
-        return f"{sid}_chart"
-
     m = re.match(r'^\d{2}_(.+)_1_summary$', stem)
     if m:
         stock_name = m.group(1)

@@ -271,13 +271,11 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
     generated_paths = set()
 
     summary_path = os.path.join(out_dir, f"{prefix}_1_summary.png")
-    chart_path   = os.path.join(out_dir, f"{prefix}_2_chart.png")
 
     paths = [
         _build_stock_summary(sec, summary_path, img_dir),
-        _build_stock_chart(sec, chart_path, img_dir),
     ]
-    generated_paths.update([summary_path, chart_path])
+    generated_paths.add(summary_path)
 
     mentions = sec.get("mentions", [])
     if mentions:

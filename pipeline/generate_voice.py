@@ -39,7 +39,7 @@ def text_to_speech(text: str, output_path: str) -> bool:
             voice=OPENAI_VOICE,
             input=processed_text,
             response_format="mp3",
-            speed=1.3,
+            speed=1.0,
         )
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "wb") as f:
@@ -73,29 +73,33 @@ def _build_jobs(sections: list, lang: str) -> list:
             if text:
                 jobs.append((text, f"{audio_base}/{sid}_summary.mp3", f"{label} [summary]"))
 
-            text = section.get("narration_chart", section.get("narration", ""))
-            if text:
-                jobs.append((text, f"{audio_base}/{sid}_chart.mp3", f"{label} [chart]"))
-
             mentions   = section.get("mentions", [])
             n_mentions = len(mentions)
 
             if n_mentions > 0:
                 pages = max(1, (n_mentions + 2) // 3)
                 for p in range(pages):
-                    field = f"narration_mention_{p}"
-                    text  = section.get(field, "")
-                    if not text and pages == 1:
-                        text = section.get("narration_mention", "")
-                    if not text:
-                        page_items = mentions[p * 3: p * 3 + 3]
-                        text = " ".join(
-                            m.get("quote_narration", m.get("quote", ""))
-                            for m in page_items
-                        )
+                    page_items = mentions[p * 3: p * 3 + 3]
+                    lines = []
+                    for m in page_items:
+                        channel = m.get("channel", "").strip()
+                        speaker = m.get("speaker", "").strip()
+                        quote   = m.get("quote", "").strip()
+                        if not quote:
+                            continue
+                        if speaker:
+                            lines.append(
+                                f"{channel}의 {speaker}은 \"{quote}\" 라고 말했습니다."
+                            )
+                        else:
+                            lines.append(
+                                f"{channel}에서는 \"{quote}\" 라고 전했습니다."
+                            )
+                    text = " ".join(lines)
                     if text:
                         jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
             else:
+                # mentions 배열이 없는 경우 기존 narration_mention 필드 fallback
                 text_0 = section.get("narration_mention_0", section.get("narration_mention", ""))
                 text_1 = section.get("narration_mention_1", "")
                 text_2 = section.get("narration_mention_2", "")
