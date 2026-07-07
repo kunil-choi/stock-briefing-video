@@ -79,23 +79,24 @@ def _build_jobs(sections: list, lang: str) -> list:
             if n_mentions > 0:
                 pages = max(1, (n_mentions + 2) // 3)
                 for p in range(pages):
-                    page_items = mentions[p * 3: p * 3 + 3]
-                    lines = []
-                    for m in page_items:
-                        channel = m.get("channel", "").strip()
-                        speaker = m.get("speaker", "").strip()
-                        quote   = m.get("quote", "").strip()
-                        if not quote:
-                            continue
-                        if speaker:
-                            lines.append(
-                                f"{channel}의 {speaker}은 \"{quote}\" 라고 말했습니다."
-                            )
-                        else:
-                            lines.append(
-                                f"{channel}에서는 \"{quote}\" 라고 전했습니다."
-                            )
-                    text = " ".join(lines)
+                    field = f"narration_mention_{p}" if pages > 1 else "narration_mention"
+                    text  = section.get(field, "")
+                    if not text:
+                        # generate_script.py가 narration_mention(_N)을 원문(quote) 기반으로
+                        # 이미 채워두므로 정상 경로에서는 여기까지 오지 않지만, 누락 시를
+                        # 대비해 mentions에서 동일한 포맷으로 재구성합니다.
+                        lines = []
+                        for m in mentions[p * 3: p * 3 + 3]:
+                            channel = m.get("channel", "").strip()
+                            speaker = m.get("speaker", "").strip()
+                            quote   = m.get("quote", "").strip()
+                            if not quote:
+                                continue
+                            if speaker:
+                                lines.append(f"{channel}의 {speaker}은 \"{quote}\" 라고 말했습니다.")
+                            else:
+                                lines.append(f"{channel}에서는 \"{quote}\" 라고 전했습니다.")
+                        text = " ".join(lines)
                     if text:
                         jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
             else:

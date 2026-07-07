@@ -13,7 +13,6 @@ ASS(Advanced SubStation Alpha) 자막 파일 생성 모듈
   01_market_00.png           → market_summary.mp3
   02_sector.png              → sectors.mp3
   10_삼성전자_1_summary.png  → stock_삼성전자_summary.mp3
-  10_삼성전자_2_chart.png    → stock_삼성전자_chart.mp3
   10_삼성전자_3_mention.png  → stock_삼성전자_mention.mp3
   10_삼성전자_3_mention_00.png → stock_삼성전자_mention_00.mp3
   90_extra_watchlist.png     → stock_추가관심종목.mp3
@@ -221,12 +220,6 @@ def _build_subtitle_map(sections: list, lang: str):
             sub  = section.get("subtitle_summary", section.get("subtitle", ""))
             if sub:
                 subtitle_map[f"{sid}_summary"] = (narr, sub)
-
-            # chart
-            narr = section.get("narration_chart", section.get("narration", ""))
-            sub  = section.get("subtitle_chart", section.get("subtitle", ""))
-            if sub:
-                subtitle_map[f"{sid}_chart"] = (narr, sub)
 
             # mention
             mentions   = section.get("mentions", [])

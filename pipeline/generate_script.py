@@ -92,8 +92,8 @@ DISCLAIMER = (
 
 # narration에서만 쓰이는 필드 — 자막 안전망을 적용하지 않음
 _NARRATION_ONLY_KEYS = {
-    "narration", "narration_summary", "narration_chart",
-    "narration_mention", "quote_narration", "id", "title", "date",
+    "narration", "narration_summary",
+    "narration_mention", "quote_narration", "quote", "id", "title", "date",
 }
 _NARRATION_MENTION_PAGE_RE = re.compile(r"^narration_mention_\d+$")
 
@@ -322,10 +322,12 @@ def _kdate_to_iso(date_str: str) -> str:
 
 
 def fetch_youtube_mentions() -> list:
-    """data/youtube_mentions.json — 종목별 실제 발언(화자/채널/원문 인용) 원본 데이터."""
+    """data/youtube_mentions.json — 종목별 실제 발언(화자/채널/원문 인용) 원본 데이터.
+    이 파일은 stock-briefing-v3 저장소의 docs/(GitHub Pages 서빙 대상) 밖인 저장소
+    루트 data/ 에 있어 Pages URL로는 항상 404이므로 raw.githubusercontent.com에서 가져온다."""
     try:
         import urllib.request
-        url = "https://kunil-choi.github.io/stock-briefing-v3/data/youtube_mentions.json"
+        url = "https://raw.githubusercontent.com/kunil-choi/stock-briefing-v3/main/data/youtube_mentions.json"
         with urllib.request.urlopen(url, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except Exception as e:
@@ -506,11 +508,13 @@ JSON으로 작성하세요. 이 호출에서는 개별 종목의 상세 설명�
   KOSPI·KOSDAQ·해외지수·환율의 등락과 핵심 원인 1~2가지만 짚고, 업종·개별 종목 상세
   설명은 하지 마세요(다음 코너에서 다룸). "먼저 오늘의 주식시장 전체 흐름을 요약해
   드리겠습니다."로 시작. points는 3~4개.
-- sectors: 900자 이상. hot_sectors 각 섹터를 3~5문장으로 충분히 설명하고, market_summary와
-  중복되는 지수·환율 코멘트는 반복하지 마세요. "오늘 시장에서 주목받는 핵심 업종들을
-  살펴보겠습니다."로 시작. sector_list는 최대 6개.
-- ai_strategy: 700자 이상. 오늘 시장 흐름을 종합한 투자 전략을 구체적으로 서술.
-  "에이아이가 제안하는 오늘의 투자 전략입니다."로 시작. bullet_points는 4~6개.
+- sectors: 900자 이상. sector_list는 최소 4개, 각 섹터마다 narration에서 최소 150자
+  이상 분량으로(주도 종목, 상승/하락 배경, 수급 근거, 전망까지) 충분히 설명하고,
+  market_summary와 중복되는 지수·환율 코멘트는 반복하지 마세요. "오늘 시장에서
+  주목받는 핵심 업종들을 살펴보겠습니다."로 시작. sector_list는 최대 6개.
+- ai_strategy: 700자 이상. bullet_points는 최소 4개, 각 bullet을 narration에서 최소
+  120자 이상 분량으로 구체적 근거·수치와 함께 서술. "에이아이가 제안하는 오늘의
+  투자 전략입니다."로 시작. bullet_points는 최대 6개.
 - 위 세 섹션 모두 목표 글자 수 미달을 절대 허용하지 마세요. 미달 시 배경 설명, 수치,
   전망을 추가해서 채우세요. "간략히", "요약하면" 같은 축약 표현은 쓰지 마세요.
 
@@ -573,9 +577,59 @@ JSON으로 작성하세요. 이 호출에서는 개별 종목의 상세 설명�
     }
 
 
+def _inject_verbatim_quotes(mentions: list, quotes: list) -> list:
+    """LLM이 재작성한 quote_narration은 원문을 요약/변형할 위험이 있으므로, 실제 발언
+    원문(quotes)을 speaker/channel로 매칭해 mention마다 "quote" 필드에 그대로 주입합니다
+    (generate_voice.py가 이 필드를 그대로 낭독합니다). 매칭 실패 시 순서로 대응시킵니다."""
+    def _key(speaker, channel):
+        return (re.sub(r"\s+", "", speaker or ""), re.sub(r"\s+", "", channel or ""))
+
+    remaining = list(quotes)
+    for i, m in enumerate(mentions):
+        mk = _key(m.get("speaker", ""), m.get("channel", ""))
+        match = next((q for q in remaining if _key(q.get("speaker", ""), q.get("channel", "")) == mk), None)
+        if not match and i < len(quotes):
+            match = quotes[i]
+        if match:
+            m["quote"] = match.get("quote", "")
+            if match.get("channel"):
+                m["channel"] = match["channel"]
+            if match.get("speaker"):
+                m["speaker"] = match["speaker"]
+            if match in remaining:
+                remaining.remove(match)
+    return mentions
+
+
+def _build_mention_pages(mentions: list) -> list:
+    """검증된 원문(quote 필드)을 근거로 mention 페이지별 텍스트를 결정적으로
+    생성합니다. generate_voice.py가 실제로 낭독하는 문장과 동일한 포맷을 써서,
+    narration_mention_N(자막 타이밍 기준 텍스트)이 실제 오디오 내용과 항상 일치하게
+    합니다 — LLM이 재작성한 문장에 의존하지 않습니다."""
+    pages = []
+    n = len(mentions)
+    if n == 0:
+        return pages
+    page_count = max(1, (n + 2) // 3)
+    for p in range(page_count):
+        lines = []
+        for m in mentions[p * 3: p * 3 + 3]:
+            channel = (m.get("channel") or "").strip()
+            speaker = (m.get("speaker") or "").strip()
+            quote   = (m.get("quote") or "").strip()
+            if not quote:
+                continue
+            if speaker:
+                lines.append(f"{channel}의 {speaker}은 \"{quote}\" 라고 말했습니다.")
+            else:
+                lines.append(f"{channel}에서는 \"{quote}\" 라고 전했습니다.")
+        pages.append(" ".join(lines))
+    return pages
+
+
 def _generate_stock_section(stock_name: str, briefing_text: str,
                              quotes: list, is_hidden: bool = False) -> dict:
-    """종목 하나에 대한 완전한 섹션(summary+chart+mention+mentions)을 생성하는 호출.
+    """종목 하나에 대한 완전한 섹션(summary+mention+mentions)을 생성하는 호출.
     market_leaders/top_stocks 종목마다 별도로 호출해, 발언 인용이 많아도(최대 9개)
     토큰 상한에 안전하게 들어갑니다."""
     system_prompt = f"""
@@ -588,21 +642,20 @@ def _generate_stock_section(stock_name: str, briefing_text: str,
 {_MENTION_RULES}
 
 ## ★ 분량 요구사항 (요구사항: 종목별 설명을 더 자세히)
-- narration_summary + narration_chart + narration_mention(_N 포함) 합산 900자 이상.
+- narration_summary + narration_mention(_N 포함) 합산 1,100자 이상 (차트 코너 없이 이
+  두 필드만으로 종목 섹션 전체 분량을 충당합니다).
 - narration_mention 계열 분량이 narration_summary보다 짧아지지 않도록 하세요. 이 코너의
   핵심은 "누가 무엇을 말했는지"이므로 mention 분량을 가장 충실하게 작성합니다.
 - 목표 미달을 절대 허용하지 마세요. "간략히", "요약하면" 표현 금지.
 
 ## ★ 코너 멘트
 - narration_summary 시작: "다음은 {stock_name} 분석입니다."
-- narration_chart 시작: "최근 이주간 주까 차트를 보면,"
 - 첫 mention 페이지 시작: "각 채널에서 언급한 내용을 보겠습니다."
 
 ## 출력 JSON 구조
 {{
   "corner_summary": "{stock_name} 한줄 요약",
   "narration_summary": "...", "subtitle_summary": "...",
-  "narration_chart": "...", "subtitle_chart": "...",
   "narration_mention": "...(언급 1~3개일 때만)", "subtitle_mention": "...",
   "narration_mention_0": "...(언급 4개 이상일 때만)", "subtitle_mention_0": "...",
   "narration_mention_1": "...", "subtitle_mention_1": "...",
@@ -628,6 +681,16 @@ narration_mention 계열 필드도 생략하세요.
     data = _call_json(system_prompt, user_content, max_tokens=6000, temperature=0.7)
     if not data:
         return {}
+    if data.get("mentions"):
+        data["mentions"] = _inject_verbatim_quotes(data["mentions"], quotes)
+        mention_pages = _build_mention_pages(data["mentions"])
+        if len(mention_pages) == 1:
+            data["narration_mention"] = mention_pages[0]
+            data["subtitle_mention"] = mention_pages[0]
+        else:
+            for p, text in enumerate(mention_pages):
+                data[f"narration_mention_{p}"] = text
+                data[f"subtitle_mention_{p}"] = text
     data["id"] = f"{'hidden_' if is_hidden else 'stock_'}{stock_name}"
     data["label"] = f"{'숨은 ' if is_hidden else ''}종목 분석 - {stock_name}"
     return data
@@ -802,11 +865,17 @@ def generate_script(
     print("\n📏 섹션별 narration 글자 수:")
     for sec in sections:
         sid = sec.get("id", "")
-        # narration 필드가 여러 이름으로 존재할 수 있음
-        narr = (
-            sec.get("narration")
-            or (sec.get("narration_summary", "") + sec.get("narration_chart", "") + sec.get("narration_mention", ""))
-        )
+        # narration 필드가 여러 이름으로 존재할 수 있음 (종목 섹션은 summary +
+        # mention 계열 — mention은 개수에 따라 narration_mention 또는
+        # narration_mention_0/1/2로 나뉘어 있을 수 있으므로 전부 합산)
+        if sec.get("narration"):
+            narr = sec["narration"]
+        else:
+            mention_texts = "".join(
+                sec.get(k, "") for k in
+                ("narration_mention", "narration_mention_0", "narration_mention_1", "narration_mention_2")
+            )
+            narr = sec.get("narration_summary", "") + mention_texts
         chars = len(narr) if narr else 0
         total_chars += chars
         print(f"  {sid}: {chars:,}자")
@@ -845,7 +914,9 @@ def run(lang: str = "KO"):
     briefing_date_iso = ""
     try:
         import urllib.request
-        url = "https://kunil-choi.github.io/stock-briefing-v3/data/briefing_data.json"
+        # docs/(GitHub Pages 서빙 대상) 밖인 저장소 루트 data/ 에 있어 Pages URL로는
+        # 항상 404이므로 raw.githubusercontent.com에서 가져온다.
+        url = "https://raw.githubusercontent.com/kunil-choi/stock-briefing-v3/main/data/briefing_data.json"
         with urllib.request.urlopen(url, timeout=10) as resp:
             raw_json = json.loads(resp.read().decode("utf-8"))
         md = raw_json.get("market_data", {})
