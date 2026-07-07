@@ -2,7 +2,7 @@ name: 📝 Generate Broadcast Script
 
 on:
   schedule:
-    - cron: "0 23 * * 0-4"
+    - cron: "30 0 * * 1-5"  # 안전망: KST 09:30 Mon-Fri (stock-briefing-v3의 dispatch 실패 시 대비)
   workflow_dispatch:
 
 jobs:
