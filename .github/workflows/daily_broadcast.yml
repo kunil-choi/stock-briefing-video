@@ -1,8 +1,9 @@
 name: 📡 Daily 15m Stock Broadcast
 
 on:
-  schedule:
-    - cron: "0 21 * * 0-4"  # KST 06:00 Mon-Fri
+  # stock-briefing-v3의 daily_briefing.yml이 브리핑 생성을 완료한 직후 dispatch로만
+  # 시작한다. 자체 cron 스케줄을 두면 v3 브리핑 생성이 끝나기 전에 전날 데이터로
+  # 영상이 만들어질 수 있어(날짜 불일치) 의도적으로 자동 스케줄을 두지 않는다.
   workflow_dispatch:
 
 permissions:

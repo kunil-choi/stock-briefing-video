@@ -3,7 +3,7 @@
 AI 주식 브리핑 — 에셋 생성 진입점
 사용법: python pipeline/generate_assets.py [KO|ko|en]
 """
-import os, sys, json
+import os, re, sys, json
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -21,6 +21,16 @@ from assets.builders import (
     build_closing,
 )
 from assets.render import close_renderer
+from assets.html_theme import set_briefing_date
+
+
+def _kdate_to_dotted(date_str: str) -> str:
+    """'2026년 07월 08일' → '2026.07.08'. 매칭 실패 시 빈 문자열."""
+    m = re.match(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", date_str or "")
+    if not m:
+        return ""
+    y, mo, d = m.groups()
+    return f"{y}.{int(mo):02d}.{int(d):02d}"
 
 # summary+chart+mention 개별 카드가 아니라 단일 슬라이드로 렌더링되는 집계형 종목 섹션
 AGGREGATE_STOCK_SECTION_IDS = {"stock_추가관심종목", "stock_오늘의픽", "stock_증권사리포트"}
@@ -46,6 +56,13 @@ def run(lang: str = "KO"):
 
     sections = data.get("sections", [])
     print(f"📂 script.json 로드 완료 (섹션 수: {len(sections)})")
+
+    # 모든 슬라이드 상단바 날짜를 실제 브리핑 날짜로 고정 (렌더링 시점의 시스템
+    # 날짜로 폴백하면 워크플로우가 전날 데이터로 실행됐을 때 날짜가 어긋난다)
+    briefing_date = _kdate_to_dotted(data.get("date", ""))
+    if briefing_date:
+        set_briefing_date(briefing_date)
+        print(f"📅 슬라이드 날짜 고정: {briefing_date}")
 
     asset_map = {"frames": [], "lang": lang}
 

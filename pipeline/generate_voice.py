@@ -73,40 +73,13 @@ def _build_jobs(sections: list, lang: str) -> list:
             if text:
                 jobs.append((text, f"{audio_base}/{sid}_summary.mp3", f"{label} [summary]"))
 
-            mentions   = section.get("mentions", [])
-            n_mentions = len(mentions)
-
-            if n_mentions > 0:
-                pages = max(1, (n_mentions + 2) // 3)
-                for p in range(pages):
-                    field = f"narration_mention_{p}" if pages > 1 else "narration_mention"
-                    text  = section.get(field, "")
-                    if not text:
-                        # generate_script.py가 narration_mention(_N)을 원문(quote) 기반으로
-                        # 이미 채워두므로 정상 경로에서는 여기까지 오지 않지만, 누락 시를
-                        # 대비해 mentions에서 동일한 포맷으로 재구성합니다.
-                        lines = []
-                        for m in mentions[p * 3: p * 3 + 3]:
-                            channel = m.get("channel", "").strip()
-                            speaker = m.get("speaker", "").strip()
-                            quote   = m.get("quote", "").strip()
-                            if not quote:
-                                continue
-                            if speaker:
-                                lines.append(f"{channel}의 {speaker}은 \"{quote}\" 라고 말했습니다.")
-                            else:
-                                lines.append(f"{channel}에서는 \"{quote}\" 라고 전했습니다.")
-                        text = " ".join(lines)
-                    if text:
-                        jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
-            else:
-                # mentions 배열이 없는 경우 기존 narration_mention 필드 fallback
-                text_0 = section.get("narration_mention_0", section.get("narration_mention", ""))
-                text_1 = section.get("narration_mention_1", "")
-                text_2 = section.get("narration_mention_2", "")
-                for p, text in enumerate([text_0, text_1, text_2]):
-                    if text:
-                        jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [mention_page{p}]"))
+            # channel_summaries: 종목당 최대 3개(유튜브/경제방송/증권사) 카테고리별
+            # 종합 분석 요약 — 한 항목당 오디오 1개(페이지 인덱스 = 배열 인덱스)
+            for p, cs in enumerate(section.get("channel_summaries", [])):
+                text = cs.get("narration", "")
+                if text:
+                    label_suffix = cs.get("channel_type", f"mention_page{p}")
+                    jobs.append((text, f"{audio_base}/{sid}_mention_{p:02d}.mp3", f"{label} [{label_suffix}]"))
         else:
             narration = section.get("narration", "")
             if narration:

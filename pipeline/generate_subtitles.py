@@ -221,50 +221,14 @@ def _build_subtitle_map(sections: list, lang: str):
             if sub:
                 subtitle_map[f"{sid}_summary"] = (narr, sub)
 
-            # mention
-            mentions   = section.get("mentions", [])
-            n_mentions = len(mentions)
-
-            # builders.py는 항상 _3_mention_{p:02d}.png 형식 사용 (단일도 _mention_00)
-            # voice.py도 동일하게 항상 _mention_{p:02d}.mp3 형식
-            # → subtitle_map 키도 항상 _mention_{p:02d} 형식으로 통일
-            if n_mentions > 0:
-                pages = max(1, (n_mentions + 2) // 3)
-                for p in range(pages):
-                    sub = section.get(f"subtitle_mention_{p}", "")
-                    narr = section.get(f"narration_mention_{p}", "")
-                    if not sub and pages == 1:
-                        # 단일 페이지: subtitle_mention/narration_mention 필드도 허용
-                        sub = section.get("subtitle_mention", "")
-                        narr = narr or section.get("narration_mention", "")
-                    page_items = mentions[p * 3: p * 3 + 3]
-                    if not sub:
-                        sub = " | ".join(
-                            m.get("quote_subtitle", "") for m in page_items
-                            if m.get("quote_subtitle", "")
-                        )
-                    if not narr:
-                        narr = " ".join(
-                            m.get("quote_narration", "") for m in page_items
-                            if m.get("quote_narration", "")
-                        )
-                    if sub:
-                        subtitle_map[f"{sid}_mention_{p:02d}"] = (narr, sub)
-            else:
-                # mentions 배열 없는 경우: subtitle_mention_N/narration_mention_N 직접 필드
-                sub_texts  = [
-                    section.get("subtitle_mention_0", section.get("subtitle_mention", "")),
-                    section.get("subtitle_mention_1", ""),
-                    section.get("subtitle_mention_2", ""),
-                ]
-                narr_texts = [
-                    section.get("narration_mention_0", section.get("narration_mention", "")),
-                    section.get("narration_mention_1", ""),
-                    section.get("narration_mention_2", ""),
-                ]
-                for p, (narr, sub) in enumerate(zip(narr_texts, sub_texts)):
-                    if sub:
-                        subtitle_map[f"{sid}_mention_{p:02d}"] = (narr, sub)
+            # channel_summaries: 종목당 최대 3개(유튜브/경제방송/증권사) 카테고리별
+            # 종합 분석 요약 — builders.py/voice.py와 동일하게 배열 인덱스를 그대로
+            # _mention_{p:02d} 페이지 번호로 사용한다.
+            for p, cs in enumerate(section.get("channel_summaries", [])):
+                sub  = cs.get("subtitle", "")
+                narr = cs.get("narration", "")
+                if sub:
+                    subtitle_map[f"{sid}_mention_{p:02d}"] = (narr, sub)
 
         elif sid == "closing":
             # 클로징 슬라이드는 투자 유의사항 전문을 화면에 이미 글자로 표시하므로
@@ -281,12 +245,51 @@ def _build_subtitle_map(sections: list, lang: str):
     return subtitle_map
 
 
-def _split_sentences(text: str) -> list:
-    """문장 단위로만 분할합니다 (화면 표출용 줄바꿈/청크 병합 없이 순수 분리)."""
+# 문장 종결부호([.!?。]) 뒤에 공백이 오는 경우에만 문장을 분리한다. 숫자 사이의
+# 소수점(예: "8302.5")은 마침표 바로 뒤에 숫자가 오므로 (?!\d)에 의해 분리되지
+# 않는다 — "8302."와 "5"로 잘못 쪼개지는 것을 방지.
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?。])(?!\d)\s*')
+
+
+def _split_into_sentences(text: str) -> list:
     if not text:
         return []
-    sentences = re.split(r'(?<=[.。!?])\s*', text.strip())
-    return [s.strip() for s in sentences if s.strip()]
+    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text.strip()) if s.strip()]
+
+
+def _split_sentences(text: str) -> list:
+    """문장 단위로만 분할합니다 (화면 표출용 줄바꿈/청크 병합 없이 순수 분리)."""
+    return _split_into_sentences(text)
+
+
+def _wrap_words(text: str, width: int) -> list:
+    """단어(공백) 경계에서만 줄바꿈해 길이 width 이하의 조각으로 나눕니다. 문장/단어
+    중간이 잘리지 않도록 문자 수 기준 강제 절단 대신 항상 공백에서만 끊습니다.
+    단어 하나가 그 자체로 width보다 길 때만 부득이하게 강제로 자릅니다."""
+    words = [w for w in text.split(" ") if w]
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            current = ""
+        if len(word) <= width:
+            current = word
+        else:
+            # 단어 자체가 width보다 긴 극단적인 경우에만 강제 분할
+            for i in range(0, len(word), width):
+                piece = word[i:i + width]
+                if len(piece) == width:
+                    lines.append(piece)
+                else:
+                    current = piece
+    if current:
+        lines.append(current)
+    return lines
 
 
 def _split_subtitle_text(text: str) -> list:
@@ -297,8 +300,7 @@ def _split_subtitle_text(text: str) -> list:
     if not text:
         return []
 
-    sentences = re.split(r'(?<=[.。!?])\s*', text.strip())
-    sentences = [s.strip() for s in sentences if s.strip()]
+    sentences = _split_into_sentences(text)
 
     chunks  = []
     current = ""
@@ -315,32 +317,21 @@ def _split_subtitle_text(text: str) -> list:
     if current:
         chunks.append(current)
 
-    # 최대 길이 초과 청크 강제 분할
+    # 최대 길이 초과 청크는 단어 경계에서만 강제 분할(문자 중간 절단 금지)
     final = []
     max_len = CHARS_PER_LINE * MAX_LINES
     for chunk in chunks:
         if len(chunk) <= max_len:
             final.append(chunk)
         else:
-            for i in range(0, len(chunk), max_len):
-                sub = chunk[i:i + max_len].strip()
-                if sub:
-                    final.append(sub)
+            final.extend(_wrap_words(chunk, max_len))
 
-    return final if final else [text[:max_len]]
+    return final if final else _wrap_words(text, max_len)
 
 
 def _format_ass_text(text: str) -> str:
-    """ASS 텍스트: 긴 줄을 \\N 으로 분리합니다."""
-    lines = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= CHARS_PER_LINE:
-            lines.append(remaining)
-            break
-        cut = remaining[:CHARS_PER_LINE]
-        lines.append(cut)
-        remaining = remaining[CHARS_PER_LINE:]
+    """ASS 텍스트: 긴 줄을 단어 경계에서 \\N 으로 분리합니다(단어 중간 절단 금지)."""
+    lines = _wrap_words(text, CHARS_PER_LINE)
     return r"\N".join(lines[:MAX_LINES])
 
 
