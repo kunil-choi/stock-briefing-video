@@ -279,13 +279,29 @@ def fetch_briefing():
                 wait_until="networkidle",
                 timeout=30000
             )
-            text = page.inner_text("body")
 
             img_dir = os.path.join(_HERE, "..", "output", "KO", "images")
             os.makedirs(img_dir, exist_ok=True)
 
             # 브리핑 앱 차트 캡처 (v3 구조)
             stock_sections = page.query_selector_all("section.stock-item, div.stock-card, article")
+
+            # 종목별 구획을 보존해 텍스트를 만듭니다. body 전체를 평문으로 긁으면
+            # 삼성SDI/삼성전기처럼 사명이 비슷한 계열사의 내용이 경계 없이 이어져
+            # 이후 LLM 요약 단계에서 서로 다른 종목의 내용이 섞일 수 있습니다.
+            text = page.inner_text("body")
+            if stock_sections:
+                blocks = []
+                for section in stock_sections:
+                    try:
+                        section_text = section.inner_text().strip()
+                    except Exception:
+                        continue
+                    if section_text:
+                        blocks.append(f"### [종목 구획 시작]\n{section_text}\n### [종목 구획 끝]")
+                if blocks:
+                    text = "\n\n".join(blocks)
+
             if not stock_sections:
                 chart_links = page.query_selector_all("a:has-text('차트보기')")
                 for link in chart_links:
@@ -671,6 +687,14 @@ def _generate_aggregate_sections(remaining_stocks: list, hidden_picks: list,
 
 {_NARRATION_SUBTITLE_RULES}
 
+## ★ 종목 혼동 금지 (매우 중요)
+- 브리핑 원문에는 사명이 비슷한 계열사(예: 삼성SDI ↔ 삼성전기, 포스코홀딩스 ↔
+  포스코퓨처엠 등)가 함께 언급될 수 있습니다. items의 각 "text"는 반드시 해당
+  "name"으로 명시된 종목에 대한 내용만 담아야 하며, 원문에서 그 종목명이 실제로
+  등장한 문장·문단만 근거로 사용하세요.
+- 다른 종목(사명이 비슷하거나 같은 섹터라도)의 실적, 수요, 제품(예: MLCC, 배터리 등)
+  관련 내용을 해당 종목의 설명에 섞어 쓰지 마세요. 확실하지 않으면 그 내용은 생략하세요.
+
 ## ★ stock_추가관심종목 (remaining_stocks 목록에 있는 종목이 있을 때만 작성)
 - narration/subtitle: "다음은 오늘의 추가 관심 종목입니다."로 시작, 종목 수에 비례해
   종목당 최소 100자, 전체 400자 이상. 각 종목: 등락 방향+핵심 이유+전망까지 2문장 이상.
@@ -738,6 +762,26 @@ def _generate_aggregate_sections(remaining_stocks: list, hidden_picks: list,
     return sections
 
 
+def _warn_cross_stock_contamination(aggregate_sections: list) -> None:
+    """items[].text에 다른 화이트리스트 종목명이 섞여 있는지 가벼운 검사만 수행하고
+    경고만 출력합니다(생성 파이프라인을 막지 않음). 종목명이 비슷한 계열사끼리 내용이
+    혼입되는 사고(예: 삼성SDI 설명에 삼성전기 언급)를 조기에 발견하기 위한 안전망입니다."""
+    all_names = list(STOCK_CODES.keys())
+    for sec in aggregate_sections:
+        for item in sec.get("items", []):
+            name = item.get("name", "")
+            text = item.get("text", "")
+            if not name or not text:
+                continue
+            own = normalize_stock_name(name)
+            for other in all_names:
+                if other == own or other in own or own in other:
+                    continue
+                if other in text:
+                    print(f"  ⚠️  종목 혼동 의심: '{name}' 설명에 다른 종목명 '{other}'가 "
+                          f"포함되어 있습니다 — {sec.get('id', '')} 섹션을 확인하세요.")
+
+
 def generate_script(
     briefing_text: str,
     market_data: dict = None,
@@ -784,6 +828,7 @@ def generate_script(
     aggregate_sections = _generate_aggregate_sections(
         remaining_stocks, core["hidden_picks"], brokerage_reports, briefing_text
     )
+    _warn_cross_stock_contamination(aggregate_sections)
 
     opening_section = {
         "id": "opening", "label": "오프닝",
