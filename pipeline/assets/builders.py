@@ -47,8 +47,10 @@ def build_opening(data, out_dir):
   background:radial-gradient(circle,{PALETTE['accent_soft']} 0%,transparent 70%);
   top:-260px;left:50%;transform:translateX(-50%);"></div>
 {kbs_badge()}
-<div style="font-size:104px;font-weight:800;line-height:1.15;">주식시장 브리핑</div>
-<div style="font-size:40px;font-weight:600;color:{PALETTE['muted']};">오늘의 핵심만 골라 드립니다</div>
+<div style="font-size:32px;font-weight:700;color:{PALETTE['accent']};letter-spacing:.01em;">돈이 몰리는 길목을 선점하라</div>
+<div style="font-size:88px;font-weight:800;line-height:1.25;">KBS 머니올라<br>주도주 브리핑</div>
+<div class="pill" style="background:{PALETTE['highlight']};color:{PALETTE['ink']};
+  font-size:34px;font-weight:800;padding:14px 34px;">단 10분, 오늘 장 준비 끝!</div>
 {date_html}
 <div style="display:flex;gap:16px;margin-top:12px;">{kw_html}</div>
 """
