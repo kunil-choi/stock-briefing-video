@@ -91,11 +91,7 @@ DISCLAIMER = (
 # ─────────────────────────────────────────────────────────────────────────────
 
 # narration에서만 쓰이는 필드 — 자막 안전망을 적용하지 않음
-_NARRATION_ONLY_KEYS = {
-    "narration", "narration_summary",
-    "narration_mention", "quote_narration", "quote", "id", "title", "date",
-}
-_NARRATION_MENTION_PAGE_RE = re.compile(r"^narration_mention_\d+$")
+_NARRATION_ONLY_KEYS = {"narration", "narration_summary", "id", "title", "date"}
 
 # 영문 약어의 한글 발음 표기 → 원래 로마자 표기 (긴 복합어 먼저)
 _ACRONYM_SUBTITLE_FIXES = [
@@ -256,7 +252,7 @@ def fix_subtitle_fields(obj, key: str = None):
     if isinstance(obj, list):
         return [fix_subtitle_fields(v, key) for v in obj]
     if isinstance(obj, str):
-        if key in _NARRATION_ONLY_KEYS or (key and _NARRATION_MENTION_PAGE_RE.match(key)):
+        if key in _NARRATION_ONLY_KEYS:
             return obj
         return fix_subtitle_text(obj)
     return obj
@@ -364,6 +360,31 @@ def build_stock_quotes(mentions: list, briefing_date_iso: str) -> dict:
     return {name: items[:9] for name, items in grouped.items()}
 
 
+def build_stock_brokerage_mentions(brokerage_reports: dict) -> dict:
+    """
+    brokerage_reports(simultaneous/new_coverage/single_significant)를 종목명 기준으로
+    재그룹핑합니다: stock_name → [{brokers, title, opinion, target_price, ai_summary}].
+    종목별 mention 종합 요약("증권사" 카테고리)의 근거 데이터로 사용됩니다.
+    """
+    grouped: dict = {}
+    if not brokerage_reports:
+        return grouped
+    for bucket in ("simultaneous", "new_coverage", "single_significant"):
+        for r in brokerage_reports.get(bucket, []) or []:
+            raw_name = (r.get("stock_name") or "").strip()
+            if not raw_name:
+                continue
+            name = normalize_stock_name(raw_name)
+            grouped.setdefault(name, []).append({
+                "brokers":      r.get("brokers", []),
+                "title":        r.get("title", ""),
+                "opinion":      r.get("opinion", ""),
+                "target_price": r.get("target_price", ""),
+                "ai_summary":   r.get("ai_summary", ""),
+            })
+    return grouped
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 스크립트 생성
 #
@@ -420,55 +441,48 @@ _NARRATION_SUBTITLE_RULES = """
 """
 
 _MENTION_RULES = """
-## ★ mention 항목 규칙 — 이 방송의 핵심 목적
-이 방송은 유튜브·증권방송에 출연한 전문가들이 각 종목에 대해 실제로 무엇을 말했는지
-종합 정리해 전달하는 것이 가장 중요한 목적입니다. 종목 설명 자체보다 "누가, 어떤
-채널에서, 무엇을 말했는지"에 더 많은 시간과 비중을 할애하세요.
+## ★ channel_summaries 항목 규칙 — 이 방송의 핵심 목적
+이 방송은 유튜브·경제방송에 출연한 전문가들과 증권사 리포트가 각 종목에 대해 실제로
+어떻게 평가하고 있는지 "정확하게 분석해 짧게 정리"해 전달하는 것이 목적입니다.
+발언·리포트 원문을 그대로 나열하거나 인용하지 말고, 핵심 논지·수치·전망을 종합적으로
+이해한 뒤 자연스러운 문장으로 다시 써서 정리하세요. 추임새·군더더기·반복되는 잡담은
+모두 제거하고 투자 판단에 실제로 도움이 되는 내용만 남기세요.
 
-### 실제 발언 근거 (반드시 준수 — 지어내기 금지)
-- 아래 별도 제공되는 stock_quotes(JSON)에 해당 종목명이 있으면, 그 안의 speaker/channel/quote를
-  그대로 근거로 사용해 quote_narration/quote_subtitle을 작성하세요. 숫자·발음 교정과 어미 다양화만
-  적용하고, 발언의 내용·수치·논조는 절대 새로 창작하거나 다른 뜻으로 바꾸지 마세요.
-- 해당 종목이 stock_quotes에 없으면 mentions 배열은 비워두거나 필드 자체를 생략하세요.
-  없는 발언을 지어내는 것보다 mentions를 생략하는 것이 낫습니다.
-- stock_quotes에 여러 발언이 있으면 가능한 한 모두 mentions에 포함하세요(슬라이드당 3개씩
-  최대 3슬라이드, 종목당 최대 9개까지 지원). 발언을 임의로 줄이지 마세요.
+### 카테고리 3종 (해당 데이터가 있는 카테고리만 작성)
+- 아래 별도 제공되는 stock_quotes(JSON)는 각 항목에 channel_type이 "유튜브" 또는
+  "경제방송"으로 표시돼 있습니다. channel_type별로 묶어서 각각 하나의 종합 요약을
+  작성하세요 (유튜브 발언들 종합 1개, 경제방송 발언들 종합 1개).
+- 별도 제공되는 stock_brokerage(JSON)가 있으면, 그 안의 브로커·투자의견·목표주가·
+  ai_summary를 종합해 "증권사" 카테고리 요약을 1개 작성하세요.
+- 해당 카테고리에 데이터가 전혀 없으면 그 카테고리는 channel_summaries 배열에서
+  완전히 생략하세요(빈 요약을 지어내지 마세요).
 
-### quote_narration (TTS 낭독용 — 발화자·채널을 부각하고 발언을 인용 형식으로)
-- 반드시 화자명과 채널명을 먼저 호명하고, 발언 내용을 인용 형식으로 이어가세요:
-  "[채널]의 [발화자]는 "(발언 원문을 존댓말로만 다듬어 그대로 인용)"라고 말했습니다." /
-  화자가 없으면 "[채널]에서는 "(발언 원문)"라고 전했습니다."
-- 발언 내용을 요약하거나 1문장으로 축약하지 말고, stock_quotes의 quote 필드 내용을
-  최대한 원문 그대로 살려 2~3문장 분량으로 구체적으로 인용하세요 (근거·수치·전망까지 포함).
-  이 방송의 핵심은 "누가 어떤 채널에서 무엇을 말했는지"이므로 발언을 재해석하지 말고
-  실제로 한 말을 전달한다는 느낌으로 작성하세요.
+### 분석·요약 원칙 (반드시 준수)
+- 없는 내용을 지어내지 말고, 제공된 데이터에 실제로 나온 의견·수치·근거만 사용하세요.
+- 단순 나열이 아니라 "종합 분석"이어야 합니다: 여러 발언/리포트의 공통된 시각이나
+  차이점을 짚고, 목표주가·투자의견·핵심 촉매·리스크 등 구체적 근거를 포함하세요.
+- 채널명/증권사명은 자연스럽게 문장 안에 녹여 언급하세요(예: "삼프로TV와 한국경제TV
+  양쪽에서 모두...", "미래에셋증권과 키움증권은 목표주가를...").
+- 분량: 카테고리별 narration 250~320자 내외(공백 포함). 짧은 headline이 아니라
+  완결된 분석 문단으로 작성하세요.
+
+### narration (TTS 낭독용)
+- "[채널 종류] 쪽에서는" 또는 "증권사 리포트에서는" 식으로 자연스럽게 시작하세요.
 - 종결어미 다양화 (같은 어미 2회 연속 금지):
-  "~라고 전했습니다" | "~고 분석했습니다" | "~다고 밝혔습니다" | "~라고 진단했습니다"
-  "~고 강조했습니다" | "~다고 내다봤습니다" | "~라고 언급했습니다" | "~고 보도했습니다"
+  "~라고 분석했습니다" | "~다고 평가했습니다" | "~라고 진단했습니다" | "~고 내다봤습니다"
   "~다고 전망했습니다" | "~라고 짚었습니다" | "~고 설명했습니다" | "~다고 판단했습니다"
 
-### quote_subtitle (화면 카드 본문 — quote 원문에서 그대로 발췌, 절대 재작성 금지)
-- 채널명·화자명은 카드 상단 배지에 별도로 크게 표시되므로 본문에는 채널/화자를
-  다시 적지 말고 발언 내용 자체만 적습니다.
-- 요약하거나 다른 표현으로 바꿔 쓰지 마세요. stock_quotes의 quote 필드 원문 중,
-  화면(50~90자 내외)에 들어갈 만큼 짧으면서도 가장 핵심적인 내용을 담은 연속된
-  구간을 문구 변경 없이 그대로 잘라 인용부호(" ")로 감싸세요. 잘라낸 부분이라는
-  것을 표시할 필요가 있으면 앞/뒤에 "…"만 붙이고, 문장 자체의 단어·어순은 절대
-  바꾸지 마세요.
-- 인용부호로 감싼 문장 뒤에는 반드시 마침표를 찍어 문장이 명확히 끝나도록 하세요
-  (자막 동기화 로직이 마침표 등 문장부호를 기준으로 문장을 구분합니다).
-- 나쁜 예(재작성/축약): 코스피 6700 돌파 주도, 단기 과열 리스크 병존
-- 원문이 "코스피 6700 돌파를 삼성전자가 주도했지만 단기적으로는 과열 신호도 함께
-  나타나고 있다고 봅니다"라면 → 좋은 예(원문 그대로 발췌): "코스피 6700 돌파를
-  삼성전자가 주도했지만 단기적으로는 과열 신호도 함께 나타나고 있다고 봅니다."
+### subtitle (화면 카드 본문)
+- narration과 문장 수·순서를 동일하게 맞추되, 숫자·영문은 subtitle 표기 규칙(아라비아
+  숫자/로마자 원표기)을 따르세요.
 
-### narration_mention_N / subtitle_mention_N 작성 규칙
-- 언급 1~3개: narration_mention / subtitle_mention (접미사 없음) 필드 하나만 작성.
-- 언급 4~6개: narration_mention_0/1, subtitle_mention_0/1 (페이지당 최대 3개 발언).
-- 언급 7~9개: narration_mention_0/1/2, subtitle_mention_0/1/2.
-- 각 페이지의 narration_mention_N은 그 페이지에 속한 mentions의 quote_narration을
-  화자·채널 소개와 함께 순서대로 이어붙인 완결된 문단으로 작성하고, subtitle_mention_N도
-  같은 순서·같은 문장 수로 대응하는 quote_subtitle들을 이어붙이세요(문장 수 일치 필수).
+## 출력 JSON의 channel_summaries 배열 형식
+"channel_summaries": [
+  {"channel_type": "유튜브", "sources": ["채널명1", "채널명2"],
+   "narration": "...(250~320자)", "subtitle": "..."},
+  {"channel_type": "경제방송", "sources": [...], "narration": "...", "subtitle": "..."},
+  {"channel_type": "증권사", "sources": ["증권사명1", "증권사명2"], "narration": "...", "subtitle": "..."}
+]
 """
 
 
@@ -581,109 +595,13 @@ JSON으로 작성하세요. 이 호출에서는 개별 종목의 상세 설명�
     }
 
 
-_SENTENCE_END_RE = re.compile(r"[.!?」』]")
-
-
-def _normalize_for_match(s: str) -> str:
-    return re.sub(r"\s+", "", s or "")
-
-
-def _extract_verbatim_excerpt(quote: str, target_len: int = 80) -> str:
-    """quote 원문에서 화면 카드 크기(약 50~90자)에 맞춰, 문구를 바꾸지 않고 그대로
-    잘라냅니다. 가능하면 문장부호 경계에서 자르고, 없으면 단어 경계에서 자른 뒤
-    말줄임표를 붙입니다."""
-    quote = (quote or "").strip()
-    if len(quote) <= target_len:
-        return quote
-    window = quote[:target_len + 20]
-    cut_positions = [m.end() for m in _SENTENCE_END_RE.finditer(window) if m.end() >= target_len * 0.5]
-    if cut_positions:
-        return quote[:cut_positions[-1]].strip()
-    truncated = quote[:target_len]
-    last_space = truncated.rfind(" ")
-    if last_space > target_len * 0.5:
-        truncated = truncated[:last_space]
-    return truncated.strip() + "…"
-
-
-def _ensure_verbatim_subtitle(candidate: str, quote: str) -> str:
-    """quote_subtitle이 실제로 quote 원문의 발췌인지 검증합니다. LLM이 요약·재작성한
-    경우(quote에 없는 표현이 섞인 경우) quote에서 직접 발췌한 문구로 교체해, 화면
-    카드에는 항상 원문 그대로의 일부만 나타나도록 보장합니다."""
-    quote = (quote or "").strip()
-    if not quote:
-        return candidate or ""
-    core = (candidate or "").strip().strip('"“”').strip()
-    if core.endswith("…"):
-        core = core[:-1].strip()
-    if core and _normalize_for_match(core) in _normalize_for_match(quote):
-        text = core
-    else:
-        text = _extract_verbatim_excerpt(quote)
-    if not text.endswith((".", "!", "?", "…")):
-        text += "."
-    return f'"{text}"'
-
-
-def _inject_verbatim_quotes(mentions: list, quotes: list) -> list:
-    """LLM이 재작성한 quote_narration/quote_subtitle은 원문을 요약·변형할 위험이
-    있으므로, 실제 발언 원문(quotes)을 speaker/channel로 매칭해 mention마다 "quote"
-    필드에 그대로 주입합니다(generate_voice.py가 이 필드를 그대로 낭독합니다).
-    quote_subtitle도 원문에서 그대로 발췌한 문구인지 검증해, 아니면 원문 발췌로
-    교체합니다(화면 카드용 — 요약이 아니라 화면 크기에 맞는 원문 일부). 매칭 실패
-    시 순서로 대응시킵니다."""
-    def _key(speaker, channel):
-        return (re.sub(r"\s+", "", speaker or ""), re.sub(r"\s+", "", channel or ""))
-
-    remaining = list(quotes)
-    for i, m in enumerate(mentions):
-        mk = _key(m.get("speaker", ""), m.get("channel", ""))
-        match = next((q for q in remaining if _key(q.get("speaker", ""), q.get("channel", "")) == mk), None)
-        if not match and i < len(quotes):
-            match = quotes[i]
-        if match:
-            m["quote"] = match.get("quote", "")
-            if match.get("channel"):
-                m["channel"] = match["channel"]
-            if match.get("speaker"):
-                m["speaker"] = match["speaker"]
-            if match in remaining:
-                remaining.remove(match)
-        m["quote_subtitle"] = _ensure_verbatim_subtitle(m.get("quote_subtitle", ""), m.get("quote", ""))
-    return mentions
-
-
-def _build_mention_pages(mentions: list) -> list:
-    """검증된 원문(quote 필드)을 근거로 mention 페이지별 텍스트를 결정적으로
-    생성합니다. generate_voice.py가 실제로 낭독하는 문장과 동일한 포맷을 써서,
-    narration_mention_N(자막 타이밍 기준 텍스트)이 실제 오디오 내용과 항상 일치하게
-    합니다 — LLM이 재작성한 문장에 의존하지 않습니다."""
-    pages = []
-    n = len(mentions)
-    if n == 0:
-        return pages
-    page_count = max(1, (n + 2) // 3)
-    for p in range(page_count):
-        lines = []
-        for m in mentions[p * 3: p * 3 + 3]:
-            channel = (m.get("channel") or "").strip()
-            speaker = (m.get("speaker") or "").strip()
-            quote   = (m.get("quote") or "").strip()
-            if not quote:
-                continue
-            if speaker:
-                lines.append(f"{channel}의 {speaker}은 \"{quote}\" 라고 말했습니다.")
-            else:
-                lines.append(f"{channel}에서는 \"{quote}\" 라고 전했습니다.")
-        pages.append(" ".join(lines))
-    return pages
-
-
 def _generate_stock_section(stock_name: str, briefing_text: str,
-                             quotes: list, is_hidden: bool = False) -> dict:
-    """종목 하나에 대한 완전한 섹션(summary+mention+mentions)을 생성하는 호출.
-    market_leaders/top_stocks 종목마다 별도로 호출해, 발언 인용이 많아도(최대 9개)
-    토큰 상한에 안전하게 들어갑니다."""
+                             quotes: list, is_hidden: bool = False,
+                             brokerage_mentions: list = None) -> dict:
+    """종목 하나에 대한 완전한 섹션(summary+channel_summaries)을 생성하는 호출.
+    market_leaders/top_stocks 종목마다 별도로 호출해, 근거 데이터가 많아도 토큰
+    상한에 안전하게 들어갑니다."""
+    brokerage_mentions = brokerage_mentions or []
     system_prompt = f"""
 너는 KBS 머니올라 주식 방송 스크립트 작성 전문가입니다. 아래 종목 '{stock_name}' 하나에
 대한 종목 분석 섹션만 작성하세요. 다른 종목은 절대 다루지 마세요.
@@ -694,55 +612,41 @@ def _generate_stock_section(stock_name: str, briefing_text: str,
 {_MENTION_RULES}
 
 ## ★ 분량 요구사항 (요구사항: 종목별 설명을 더 자세히)
-- narration_summary + narration_mention(_N 포함) 합산 1,100자 이상 (차트 코너 없이 이
-  두 필드만으로 종목 섹션 전체 분량을 충당합니다).
-- narration_mention 계열 분량이 narration_summary보다 짧아지지 않도록 하세요. 이 코너의
-  핵심은 "누가 무엇을 말했는지"이므로 mention 분량을 가장 충실하게 작성합니다.
+- narration_summary 400자 이상.
+- channel_summaries의 각 항목 narration은 250~320자 내외.
 - 목표 미달을 절대 허용하지 마세요. "간략히", "요약하면" 표현 금지.
 
 ## ★ 코너 멘트
 - narration_summary 시작: "다음은 {stock_name} 분석입니다."
-- 첫 mention 페이지 시작: "각 채널에서 언급한 내용을 보겠습니다."
 
 ## 출력 JSON 구조
 {{
   "corner_summary": "{stock_name} 한줄 요약",
   "narration_summary": "...", "subtitle_summary": "...",
-  "narration_mention": "...(언급 1~3개일 때만)", "subtitle_mention": "...",
-  "narration_mention_0": "...(언급 4개 이상일 때만)", "subtitle_mention_0": "...",
-  "narration_mention_1": "...", "subtitle_mention_1": "...",
-  "narration_mention_2": "...(언급 7개 이상일 때만)", "subtitle_mention_2": "...",
   "price": "000,000", "change": "+0.00%", "change_positive": true,
   "summary": "한줄 요약", "catalysts": ["촉매1", "촉매2"], "risks": ["리스크1"],
-  "mentions": [
-    {{"speaker": "발화자명", "channel": "채널명",
-      "quote_narration": "TTS 낭독용 — 발화자·채널 호명 후 인용",
-      "quote_subtitle": "화면 카드용 — 발언 인용, 50~90자"}}
+  "channel_summaries": [
+    {{"channel_type": "유튜브", "sources": ["채널명1", "채널명2"],
+      "narration": "...(250~320자)", "subtitle": "..."}},
+    {{"channel_type": "경제방송", "sources": [...], "narration": "...", "subtitle": "..."}},
+    {{"channel_type": "증권사", "sources": ["증권사명1"], "narration": "...", "subtitle": "..."}}
   ]
 }}
 
-이 종목에 대한 실제 발언 데이터(stock_quotes)가 비어 있으면 mentions는 빈 배열로 두고
-narration_mention 계열 필드도 생략하세요.
+stock_quotes/stock_brokerage 둘 다 비어 있으면 channel_summaries는 빈 배열로 두세요.
 """
     user_content = (
-        (f"## 이 종목의 실제 발언 인용 (mentions 필드는 이 데이터만 근거로 작성, 지어내기 금지)\n"
+        (f"## 이 종목의 유튜브·경제방송 발언 원본 (channel_type별로 묶어 종합 분석)\n"
          f"{json.dumps(quotes, ensure_ascii=False, indent=2)}\n\n"
-         if quotes else "이 종목에 대한 실제 발언 데이터가 없습니다. mentions는 빈 배열로 두세요.\n\n")
+         if quotes else "이 종목에 대한 유튜브·경제방송 발언 데이터가 없습니다.\n\n")
+        + (f"## 이 종목의 증권사 리포트 원본 (종합해 '증권사' 카테고리로 분석)\n"
+           f"{json.dumps(brokerage_mentions, ensure_ascii=False, indent=2)}\n\n"
+           if brokerage_mentions else "이 종목에 대한 증권사 리포트 데이터가 없습니다.\n\n")
         + f"## 브리핑 원문 (이 중 '{stock_name}' 관련 내용만 참고하세요)\n{briefing_text}"
     )
     data = _call_json(system_prompt, user_content, max_tokens=6000, temperature=0.7)
     if not data:
         return {}
-    if data.get("mentions"):
-        data["mentions"] = _inject_verbatim_quotes(data["mentions"], quotes)
-        mention_pages = _build_mention_pages(data["mentions"])
-        if len(mention_pages) == 1:
-            data["narration_mention"] = mention_pages[0]
-            data["subtitle_mention"] = mention_pages[0]
-        else:
-            for p, text in enumerate(mention_pages):
-                data[f"narration_mention_{p}"] = text
-                data[f"subtitle_mention_{p}"] = text
     data["id"] = f"{'hidden_' if is_hidden else 'stock_'}{stock_name}"
     data["label"] = f"{'숨은 ' if is_hidden else ''}종목 분석 - {stock_name}"
     return data
@@ -835,6 +739,7 @@ def generate_script(
     stock_quotes: dict = None,
 ) -> dict:
     stock_quotes = stock_quotes or {}
+    stock_brokerage = build_stock_brokerage_mentions(brokerage_reports)
 
     print("\n🧩 1/3 — 시장요약/업종분석/AI전략 + 종목 분류 생성 중...")
     core = _generate_core(briefing_text, market_data)
@@ -855,7 +760,8 @@ def generate_script(
     stock_sections = []
     for i, stock_name in enumerate(major_stocks, 1):
         print(f"   [{i}/{len(major_stocks)}] {stock_name}")
-        sec = _generate_stock_section(stock_name, briefing_text, stock_quotes.get(stock_name, []))
+        sec = _generate_stock_section(stock_name, briefing_text, stock_quotes.get(stock_name, []),
+                                       brokerage_mentions=stock_brokerage.get(stock_name, []))
         if sec:
             stock_sections.append(sec)
         else:
@@ -918,16 +824,12 @@ def generate_script(
     for sec in sections:
         sid = sec.get("id", "")
         # narration 필드가 여러 이름으로 존재할 수 있음 (종목 섹션은 summary +
-        # mention 계열 — mention은 개수에 따라 narration_mention 또는
-        # narration_mention_0/1/2로 나뉘어 있을 수 있으므로 전부 합산)
+        # channel_summaries 각 항목의 narration을 전부 합산)
         if sec.get("narration"):
             narr = sec["narration"]
         else:
-            mention_texts = "".join(
-                sec.get(k, "") for k in
-                ("narration_mention", "narration_mention_0", "narration_mention_1", "narration_mention_2")
-            )
-            narr = sec.get("narration_summary", "") + mention_texts
+            cs_texts = "".join(cs.get("narration", "") for cs in sec.get("channel_summaries", []))
+            narr = sec.get("narration_summary", "") + cs_texts
         chars = len(narr) if narr else 0
         total_chars += chars
         print(f"  {sid}: {chars:,}자")
@@ -952,6 +854,7 @@ def generate_script(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run(lang: str = "KO"):
+    global TODAY
     lang = lang.upper()
     briefing_text = fetch_briefing()
     if not briefing_text:
@@ -972,7 +875,14 @@ def run(lang: str = "KO"):
         with urllib.request.urlopen(url, timeout=10) as resp:
             raw_json = json.loads(resp.read().decode("utf-8"))
         md = raw_json.get("market_data", {})
-        briefing_date_iso = _kdate_to_iso(raw_json.get("briefing_date", ""))
+        briefing_date_str = raw_json.get("briefing_date", "")
+        briefing_date_iso = _kdate_to_iso(briefing_date_str)
+        if briefing_date_str:
+            # 시스템 실행 시각(TODAY) 대신 실제 브리핑이 다루는 날짜를 사용— 워크플로우가
+            # 스케줄로 조기 실행되어 전날 데이터로 생성되더라도 영상에는 데이터 기준
+            # 날짜가 정확히 표시된다.
+            TODAY = briefing_date_str
+            print(f"📅 브리핑 날짜: {TODAY} (실제 브리핑 데이터 기준)")
 
         _br = raw_json.get("brokerage_reports") or {}
         if any(_br.get(k) for k in ("simultaneous", "new_coverage", "single_significant")):

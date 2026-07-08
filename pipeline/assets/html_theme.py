@@ -15,6 +15,17 @@ from .config import SUBTITLE_ZONE_TOP
 W, H = 1920, 1080
 SUBTITLE_BAR_H = H - SUBTITLE_ZONE_TOP  # 화면 하단 자막 전용 고정 여백(px). 슬라이드 콘텐츠는 이 영역을 절대 침범하지 않음.
 
+# 각 슬라이드 상단바에 표시할 날짜. generate_assets.py가 script.json의 실제 브리핑
+# 날짜로 최초 1회 설정한다 — 설정하지 않으면 렌더링 시점의 시스템 날짜로 폴백하는데,
+# 워크플로우가 브리핑 생성 완료 전에 캐시된 이전 데이터로 실행되면 날짜가 실제
+# 브리핑 내용과 어긋나는 문제가 있었다.
+_BRIEFING_DATE_STR = ""
+
+
+def set_briefing_date(date_str: str) -> None:
+    global _BRIEFING_DATE_STR
+    _BRIEFING_DATE_STR = date_str or ""
+
 PALETTE = {
     "bg":           "#faf9f6",
     "dot":          "#e6e4dc",
@@ -121,7 +132,7 @@ body{{
 
 def shell(topbar_label: str, content_html: str, stock_tag: str = "",
           date_str: str = "") -> str:
-    date_str = date_str or date.today().strftime("%Y.%m.%d")
+    date_str = date_str or _BRIEFING_DATE_STR or date.today().strftime("%Y.%m.%d")
     tag_html = f'<div class="tag">#{esc(stock_tag)}</div>' if stock_tag else ""
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>{BASE_CSS}</style></head>
 <body><div class="stage">

@@ -6,7 +6,7 @@ generate_assets.py가 기대하는 함수 시그니처/반환값/출력 파일�
 """
 import os
 
-from .config import W, H, classify_channel_type, resolve_channel_identity
+from .config import W, H
 from .render import render_html_to_png
 from .html_theme import (
     esc, file_uri, shell, centered_shell, kbs_badge, stat_table,
@@ -43,7 +43,7 @@ def build_opening(data, out_dir):
     )
 
     content = f"""
-<div style="position:absolute;width:900px;height:900px;border-radius:50%;
+<div style="position:absolute;z-index:-1;width:900px;height:900px;border-radius:50%;
   background:radial-gradient(circle,{PALETTE['accent_soft']} 0%,transparent 70%);
   top:-260px;left:50%;transform:translateX(-50%);"></div>
 {kbs_badge()}
@@ -223,42 +223,26 @@ def _build_stock_chart(sec, out_path, img_dir):
     return render_html_to_png(html, out_path)
 
 
-# ── 언급(mention) 슬라이드 ─────────────────────────────────────────────────
+# ── 언급(mention) 슬라이드 — 채널 카테고리별 종합 분석 ──────────────────────
+
+_CHANNEL_TYPE_LABELS = {"유튜브": "유튜브 종합", "경제방송": "경제방송 종합", "증권사": "증권사 리포트 종합"}
+
 
 def _build_mention_page(sec, out_path, page_idx):
     stock_name = sec.get("id", "").replace("stock_", "").replace("hidden_", "")
-    mentions   = sec.get("mentions", [])
+    summaries  = sec.get("channel_summaries", [])
+    total_pages = max(1, len(summaries))
+    cs = summaries[page_idx] if page_idx < len(summaries) else {}
 
-    if mentions:
-        page_mentions = mentions[page_idx * 3: page_idx * 3 + 3]
-        total_pages = max(1, (len(mentions) + 2) // 3)
-    else:
-        field = {0: "subtitle_mention_0", 1: "subtitle_mention_1", 2: "subtitle_mention_2"}.get(
-            page_idx, "subtitle_mention"
-        )
-        raw = sec.get(field, sec.get("subtitle_mention", ""))
-        paragraphs = numbered_bullets_from_text(raw, max_items=3)
-        page_mentions = [
-            {"speaker": "", "channel": stock_name, "quote_subtitle": p}
-            for p in paragraphs
-        ]
-        total_pages = 1
+    channel_type = cs.get("channel_type", "")
+    sources      = [s for s in cs.get("sources", []) if s]
+    content      = cs.get("subtitle", "")
+    label        = _CHANNEL_TYPE_LABELS.get(channel_type, channel_type or "종합 분석")
+    source_text  = ", ".join(sources)
 
-    cards = ""
-    for mi, m in enumerate(page_mentions):
-        if isinstance(m, str):
-            m = {"speaker": "", "channel": "", "quote_subtitle": m}
-        raw_speaker = (m.get("speaker") or "").strip()
-        raw_channel = (m.get("channel") or m.get("source") or "").strip()
-        # script.json이 정규화 이전의 원본 channel/speaker를 담고 있을 수 있으므로
-        # 렌더링 직전에도 한 번 더 정리해 배지가 중복 표시되지 않도록 방어한다.
-        channel, speaker = resolve_channel_identity(raw_channel, raw_speaker)
-        channel_type = classify_channel_type(channel)
-        content = m.get("quote_subtitle", m.get("quote", m.get("content", "")))
-        color = _ACCENT_CYCLE[mi % len(_ACCENT_CYCLE)]
-        cards += quote_bubble(channel, speaker, content, color, channel_type)
+    card = quote_bubble(source_text, "", content, _ACCENT_CYCLE[page_idx % len(_ACCENT_CYCLE)], label)
 
-    body = (f'<div style="display:flex;flex-direction:column;gap:20px;">{cards}</div>'
+    body = (f'<div style="display:flex;flex-direction:column;gap:20px;">{card}</div>'
             + page_dots(total_pages, page_idx))
 
     html = shell(f"전문가·방송 언급: {stock_name}", body, stock_tag=stock_name)
@@ -277,14 +261,7 @@ def build_stock_cards(sec, out_dir, img_dir, prefix):
     ]
     generated_paths.add(summary_path)
 
-    mentions = sec.get("mentions", [])
-    if mentions:
-        pages = max(1, (len(mentions) + 2) // 3)
-    else:
-        has_0 = bool(sec.get("narration_mention_0") or sec.get("subtitle_mention_0"))
-        has_1 = bool(sec.get("narration_mention_1") or sec.get("subtitle_mention_1"))
-        has_2 = bool(sec.get("narration_mention_2") or sec.get("subtitle_mention_2"))
-        pages = 3 if has_2 else (2 if has_1 else 1)
+    pages = len(sec.get("channel_summaries", []))
 
     for p in range(pages):
         mention_path = os.path.join(out_dir, f"{prefix}_3_mention_{p:02d}.png")
